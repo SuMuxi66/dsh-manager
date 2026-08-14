@@ -126,15 +126,7 @@ check('mcp market install buttons present', installBtns >= 1, 'btns=' + installB
 await page.locator('.dshm-btn', { hasText: '已配置' }).click()
 await page.waitForTimeout(800)
 
-// 6. models tab
-await page.locator('.dshm-tab', { hasText: '模型' }).click()
-await page.waitForTimeout(1200)
-const modelsText = await page.locator('.dshm-body').textContent()
-check('models shows default provider', modelsText.includes('deepseek-official'))
-check('models shows providers', modelsText.includes('llm-pi-ai') || modelsText.includes('llm-deepseek'))
-await page.screenshot({ path: OUT + '-5-models.png' })
-
-// 7. theme tab
+// 6. theme tab
 await page.locator('.dshm-tab', { hasText: '皮肤' }).click()
 await page.waitForTimeout(1200)
 const themeText = await page.locator('.dshm-body').textContent()

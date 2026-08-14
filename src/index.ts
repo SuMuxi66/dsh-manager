@@ -143,8 +143,11 @@ async function scanSkills(): Promise<Array<{ name: string; description: string; 
           const md = join(base, 'SKILL.md')
           const content = await readFile(md, 'utf8')
           const meta = parseSkillMeta(content)
+          // The on-disk name is the skill identity (official provider requires
+          // frontmatter name to match the directory); description comes from
+          // frontmatter.
           out.push({
-            name: meta.name ?? entry.name,
+            name: entry.name,
             description: meta.description ?? '',
             path: md,
             source: root.source,
@@ -154,7 +157,7 @@ async function scanSkills(): Promise<Array<{ name: string; description: string; 
           const content = await readFile(base, 'utf8')
           const meta = parseSkillMeta(content)
           out.push({
-            name: meta.name ?? entry.name.replace(/\.md$/, ''),
+            name: entry.name.replace(/\.md$/, ''),
             description: meta.description ?? '',
             path: base,
             source: root.source,
@@ -664,7 +667,7 @@ export function apply(ctx: Context): void {
           return
         }
         // POST /manager/api/skills/install {name, content} — write a user
-        // skill under <agentsHome>/skills/<name>/SKILL.md
+        // skill under <dshHome>/skills/<name>/SKILL.md (the user-dsh root)
         if (req.method === 'POST' && path === '/manager/api/skills/install') {
           const body = await readBody(req)
           const name = typeof body.name === 'string' ? body.name.trim() : ''
@@ -677,7 +680,7 @@ export function apply(ctx: Context): void {
             json(res, 400, { ok: false, error: 'content required' })
             return
           }
-          const dir = join(agentsHome(), 'skills', name)
+          const dir = join(dshHome(), 'skills', name)
           await mkdir(dir, { recursive: true })
           await writeFile(join(dir, 'SKILL.md'), content, 'utf8')
           json(res, 200, { ok: true, path: join(dir, 'SKILL.md') })
@@ -700,7 +703,7 @@ export function apply(ctx: Context): void {
             json(res, 400, { ok: false, error: 'cannot derive a valid skill name from frontmatter or filename' })
             return
           }
-          const dir = join(agentsHome(), 'skills', name)
+          const dir = join(dshHome(), 'skills', name)
           await mkdir(dir, { recursive: true })
           await writeFile(join(dir, 'SKILL.md'), content, 'utf8')
           json(res, 200, { ok: true, name, path: join(dir, 'SKILL.md') })
@@ -814,71 +817,6 @@ export function apply(ctx: Context): void {
           ]
           await saveMcpServers(ctx, servers)
           json(res, 200, { ok: true, note: `已从商店安装 ${name}（${url}）；重启 web/桌面端后生效。` })
-          return
-        }
-
-        // ================= M3: models =================
-        // GET /manager/api/models — default model + configurable providers
-        if (req.method === 'GET' && path === '/manager/api/models') {
-          const settings = ctx.get('settings') as { get?: (ns: string) => Record<string, unknown> | undefined } | undefined
-          const llm = ctx.get('llm') as { listConfigurableProviders?: () => Array<{ provider: string; displayName: string; settingsNs: string }> } | undefined
-          const defaults = settings?.get?.('agent-default-model') ?? null
-          const providers = (llm?.listConfigurableProviders?.() ?? []).map((entry) => {
-            const section = settings?.get?.(entry.settingsNs) ?? {}
-            const sectionView = { ...section }
-            return {
-              provider: entry.provider,
-              displayName: entry.displayName,
-              settingsNs: entry.settingsNs,
-              section: sectionView,
-            }
-          })
-          json(res, 200, { ok: true, default: defaults, providers })
-          return
-        }
-        // POST /manager/api/models/default {provider, model, reasoningEffort?}
-        if (req.method === 'POST' && path === '/manager/api/models/default') {
-          const body = await readBody(req)
-          const provider = typeof body.provider === 'string' ? body.provider : ''
-          const model = typeof body.model === 'string' ? body.model : ''
-          if (provider === '' || model === '') {
-            json(res, 400, { ok: false, error: 'provider and model required' })
-            return
-          }
-          const settings = ctx.get('settings') as { update?: (ns: string, patch: Record<string, unknown>) => Promise<unknown> } | undefined
-          if (settings?.update === undefined) {
-            json(res, 500, { ok: false, error: 'settings service unavailable' })
-            return
-          }
-          const patch: Record<string, unknown> = { provider, model }
-          if (typeof body.reasoningEffort === 'string' && body.reasoningEffort !== '') patch.reasoningEffort = body.reasoningEffort
-          await settings.update('agent-default-model', patch)
-          json(res, 200, { ok: true })
-          return
-        }
-        // POST /manager/api/models/provider {settingsNs, section} — update one
-        // configurable provider's settings section (registered ns only).
-        if (req.method === 'POST' && path === '/manager/api/models/provider') {
-          const body = await readBody(req)
-          const ns = typeof body.settingsNs === 'string' ? body.settingsNs : ''
-          const section = body.section !== null && typeof body.section === 'object' ? body.section as Record<string, unknown> : null
-          if (ns === '' || section === null) {
-            json(res, 400, { ok: false, error: 'settingsNs and section required' })
-            return
-          }
-          const llm = ctx.get('llm') as { listConfigurableProviders?: () => Array<{ settingsNs: string }> } | undefined
-          const allowed = (llm?.listConfigurableProviders?.() ?? []).some((entry) => entry.settingsNs === ns)
-          if (!allowed) {
-            json(res, 403, { ok: false, error: `settings namespace ${JSON.stringify(ns)} is not a configurable provider` })
-            return
-          }
-          const settings = ctx.get('settings') as { update?: (ns: string, patch: Record<string, unknown>) => Promise<unknown> } | undefined
-          if (settings?.update === undefined) {
-            json(res, 500, { ok: false, error: 'settings service unavailable' })
-            return
-          }
-          await settings.update(ns, section)
-          json(res, 200, { ok: true })
           return
         }
 

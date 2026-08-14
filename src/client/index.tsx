@@ -2,7 +2,7 @@
  * dsh-manager browser half: registers the sidebar footer entry and renders
  * the manager console overlay. All data flows over the same-origin /manager
  * JSON APIs served by the host half — no private harness internals. Tabs:
- * 插件 / 市场 (M1), Skills / MCP (M2), Keys / 模型 / 皮肤 (M3).
+ * 插件 / 市场 (M1), Skills / MCP (M2), 皮肤 (M3).
  * @module dsh-manager/client
  */
 
@@ -125,14 +125,6 @@ interface McpServer {
   running: boolean
 }
 
-/** One configurable provider. */
-interface ProviderRow {
-  provider: string
-  displayName: string
-  settingsNs: string
-  section: Record<string, unknown>
-}
-
 /** Shared fetch helper for the /manager APIs. Throws on transport failure so
  * callers can surface a message instead of rendering undefined data. */
 async function managerFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -167,7 +159,7 @@ async function loadInto<T>(setter: (v: T) => void, onError: (msg: string) => voi
   }
 }
 
-type Tab = 'plugins' | 'market' | 'skills' | 'mcp' | 'models' | 'theme'
+type Tab = 'plugins' | 'market' | 'skills' | 'mcp' | 'theme'
 
 /** Sidebar footer entry: opens the manager overlay. */
 function ManagerButton({ open }: { open: () => void }): ReactNode {
@@ -175,7 +167,7 @@ function ManagerButton({ open }: { open: () => void }): ReactNode {
     <button
       type="button"
       aria-label="管理控制台"
-      title="管理控制台：插件 / 市场 / Skills / MCP / Keys / 模型 / 皮肤"
+      title="管理控制台：插件 / 市场 / Skills / MCP / 皮肤"
       onClick={open}
       style={{
         width: 28, height: 28, borderRadius: 8, border: '1px solid #333947',
@@ -442,7 +434,7 @@ function SkillsTab({ busy, setBusy, msg, setMsg }: {
           )}
         </div>
       ))}
-      <div className="dshm-hint">Skills 目录：用户级 ~/.agents/skills · 项目级 .dsh/skills 与 .agents/skills · 内置 bundled。</div>
+      <div className="dshm-hint">用户技能存于 ~/.dsh/skills（新建/导入/卸载均在此）· 展示范围：~/.dsh/skills、~/.agents/skills、项目级与内置 bundled。</div>
     </>
   )
 }
@@ -724,138 +716,6 @@ function McpTab({ busy, setBusy, msg, setMsg }: {
   )
 }
 
-/** ==================== M3: models tab ==================== */
-function ModelsTab({ busy, setBusy, msg, setMsg }: {
-  busy: boolean
-  setBusy: (v: boolean) => void
-  msg: { ok: boolean; text: string } | null
-  setMsg: (v: { ok: boolean; text: string } | null) => void
-}): ReactNode {
-  const [defaults, setDefaults] = useState<Record<string, unknown> | null>(null)
-  const [providers, setProviders] = useState<ProviderRow[]>([])
-  const [loading, setLoading] = useState(true)
-  const [defProvider, setDefProvider] = useState('')
-  const [defModel, setDefModel] = useState('')
-  const [defEffort, setDefEffort] = useState('')
-  const [editingNs, setEditingNs] = useState<string | null>(null)
-  const [editBaseUrl, setEditBaseUrl] = useState('')
-  const [editApiKeyEnv, setEditApiKeyEnv] = useState('')
-
-  const refresh = async (): Promise<void> => {
-    await loadInto(
-      (data) => {
-        setDefaults(data.default)
-        setProviders(data.providers)
-        if (data.default !== null) {
-          setDefProvider(String(data.default.provider ?? ''))
-          setDefModel(String(data.default.model ?? ''))
-          setDefEffort(String(data.default.reasoningEffort ?? ''))
-        }
-      },
-      (msg) => setMsg({ ok: false, text: msg }),
-      async () => {
-        const data = await managerFetch<{ ok: boolean; default: Record<string, unknown> | null; providers: ProviderRow[] }>('/manager/api/models')
-        if (!data.ok) throw new Error(data.ok === undefined ? 'host 端未加载 dsh-manager（请重启 web/桌面端）' : 'models API 错误')
-        return data
-      },
-    )
-  }
-  useEffect(() => { void refresh().then(() => setLoading(false)) }, [])
-
-  const saveDefault = async (): Promise<void> => {
-    setBusy(true)
-    setMsg(null)
-    const body: Record<string, unknown> = { provider: defProvider.trim(), model: defModel.trim() }
-    if (defEffort !== '') body.reasoningEffort = defEffort
-    const data = await managerFetch<{ ok: boolean; error?: string }>('/manager/api/models/default', {
-      method: 'POST', body: JSON.stringify(body) })
-    setMsg(data.ok ? { ok: true, text: '默认模型已更新。' } : { ok: false, text: data.error ?? 'failed' })
-    await refresh()
-    setBusy(false)
-  }
-
-  const openProvider = (row: ProviderRow): void => {
-    setEditingNs(row.settingsNs)
-    const section = row.section ?? {}
-    setEditBaseUrl(String(section.baseURL ?? ''))
-    setEditApiKeyEnv(String(section.apiKeyEnv ?? ''))
-  }
-
-  const saveProvider = async (): Promise<void> => {
-    if (editingNs === null) return
-    setBusy(true)
-    setMsg(null)
-    const current = providers.find((p) => p.settingsNs === editingNs)?.section ?? {}
-    const section = { ...current, baseURL: editBaseUrl.trim(), apiKeyEnv: editApiKeyEnv.trim() }
-    const data = await managerFetch<{ ok: boolean; error?: string }>('/manager/api/models/provider', {
-      method: 'POST', body: JSON.stringify({ settingsNs: editingNs, section }) })
-    setMsg(data.ok ? { ok: true, text: `供应商 ${editingNs} 已更新。` } : { ok: false, text: data.error ?? 'failed' })
-    setEditingNs(null)
-    await refresh()
-    setBusy(false)
-  }
-
-  return (
-    <>
-      <div className="dshm-sec">
-        <div className="dshm-sec-title">默认模型（agent-default-model）</div>
-        {loading ? <div style={{ color: '#6b7384' }}>加载中…</div> : (
-          <div className="dshm-form">
-            <div className="dshm-form-row">
-              <input className="dshm-input" placeholder="provider（如 deepseek-official / pi-ai）" value={defProvider}
-                onChange={(e) => setDefProvider(e.target.value)} />
-              <input className="dshm-input" placeholder="model（如 deepseek-v4-flash）" value={defModel}
-                onChange={(e) => setDefModel(e.target.value)} />
-              <select className="dshm-select" value={defEffort} onChange={(e) => setDefEffort(e.target.value)}>
-                <option value="">默认推理强度</option>
-                <option value="min">min</option>
-                <option value="medium">medium</option>
-                <option value="max">max</option>
-              </select>
-              <button type="button" className="dshm-btn primary" disabled={busy || defProvider === '' || defModel === ''}
-                onClick={() => void saveDefault()}>保存</button>
-            </div>
-          </div>
-        )}
-      </div>
-      <div className="dshm-sec">
-        <div className="dshm-sec-title">模型供应商（configurable providers）</div>
-        {providers.map((row) => (
-          <div key={row.settingsNs} className="dshm-row" style={{ alignItems: 'flex-start' }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div><span className="dshm-name">{row.displayName}</span> <span className="dshm-id">{row.provider} · {row.settingsNs}</span></div>
-              <div className="dshm-mono" style={{ marginTop: 4 }}>
-                baseURL: {String(row.section.baseURL ?? '-')}<br />
-                apiKeyEnv: {String(row.section.apiKeyEnv ?? '-')}<br />
-                models: {Array.isArray(row.section.models) ? (row.section.models as Array<{ id?: string }>).map((m) => m.id ?? '').join(', ') : '-'}
-              </div>
-            </div>
-            <button type="button" className="dshm-btn" onClick={() => openProvider(row)}>编辑</button>
-          </div>
-        ))}
-      </div>
-      {editingNs !== null && (
-        <div className="dshm-form">
-          <div className="dshm-sec-title">编辑供应商：{editingNs}</div>
-          <div className="dshm-form-row">
-            <input className="dshm-input" placeholder="baseURL（如 http://host:port/v1）" value={editBaseUrl}
-              onChange={(e) => setEditBaseUrl(e.target.value)} />
-          </div>
-          <div className="dshm-form-row">
-            <input className="dshm-input" placeholder="apiKeyEnv（环境变量名，如 MY_API_KEY）" value={editApiKeyEnv}
-              onChange={(e) => setEditApiKeyEnv(e.target.value)} />
-          </div>
-          <div className="dshm-form-row">
-            <button type="button" className="dshm-btn primary" disabled={busy} onClick={() => void saveProvider()}>保存</button>
-            <button type="button" className="dshm-btn" onClick={() => setEditingNs(null)}>取消</button>
-          </div>
-        </div>
-      )}
-      <div className="dshm-hint">models 列表等其他字段保留原值；修改供应商后到 Keys 页配置对应 apiKeyEnv。</div>
-    </>
-  )
-}
-
 /** ==================== M3: theme tab ==================== */
 function ThemeTab({ busy, setBusy, msg, setMsg }: {
   busy: boolean
@@ -947,7 +807,6 @@ function ManagerPanel({ onClose }: { onClose?: () => void }): ReactNode {
     { id: 'market', label: '市场' },
     { id: 'skills', label: 'Skills' },
     { id: 'mcp', label: 'MCP' },
-    { id: 'models', label: '模型' },
     { id: 'theme', label: '皮肤' },
   ]
 
@@ -972,7 +831,6 @@ function ManagerPanel({ onClose }: { onClose?: () => void }): ReactNode {
         {tab === 'market' && <MarketTab busy={busy} setBusy={setBusy} msg={msg} setMsg={setMsg} />}
         {tab === 'skills' && <SkillsTab busy={busy} setBusy={setBusy} msg={msg} setMsg={setMsg} />}
         {tab === 'mcp' && <McpTab busy={busy} setBusy={setBusy} msg={msg} setMsg={setMsg} />}
-        {tab === 'models' && <ModelsTab busy={busy} setBusy={setBusy} msg={msg} setMsg={setMsg} />}
         {tab === 'theme' && <ThemeTab busy={busy} setBusy={setBusy} msg={msg} setMsg={setMsg} />}
         <Msg msg={msg} />
       </div>

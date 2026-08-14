@@ -59,6 +59,15 @@ check('imported skill visible', (r.json.skills ?? []).some((s) => s.name === 'my
 const fallbackName = 'file-fallback-' + Date.now().toString(36)
 r = await call('POST', '/manager/api/skills/import', { filename: fallbackName + '.md', content: '# No frontmatter here' })
 check('skill import falls back to filename', r.status === 200 && r.json.ok === true && r.json.name === fallbackName, JSON.stringify(r.json))
+// imported skills land in <DSH_HOME>/skills (user-dsh root)
+const dshHome = process.env.DSH_HOME ?? ''
+const dshSkills = dshHome !== '' ? dshHome + '\\skills' : null
+if (dshSkills !== null) {
+  const fs = await import('node:fs')
+  check('imported skill on disk under DSH_HOME/skills', fs.existsSync(dshSkills + '\\my-imported-helper\\SKILL.md'), dshSkills)
+} else {
+  console.log('SKIP disk path check (DSH_HOME not set)'); pass++
+}
 // import with weird name normalization
 r = await call('POST', '/manager/api/skills/import', { filename: 'My Cool Skill!.md', content: '---\nname: "My Cool Skill!"\ndescription: x\n---\nbody' })
 check('skill import normalizes name', r.status === 200 && r.json.ok === true && /^[a-z0-9][a-z0-9._-]*$/.test(r.json.name ?? ''), JSON.stringify(r.json))
@@ -125,22 +134,9 @@ check('install-market rejects bad name', r.status === 400, JSON.stringify(r.json
 r = await call('POST', '/manager/api/mcp/install-market', { name: 'okname', url: 'not-a-url' })
 check('install-market rejects bad url', r.status === 400, JSON.stringify(r.json))
 
-// 8. models
+// 8. models endpoints must be gone
 r = await call('GET', '/manager/api/models')
-check('models list ok', r.status === 200 && r.json.ok === true, JSON.stringify(r.json).slice(0, 300))
-const defaultRow = r.json.default
-if (defaultRow !== null && typeof defaultRow.provider === 'string' && typeof defaultRow.model === 'string') {
-  r = await call('POST', '/manager/api/models/default', { provider: defaultRow.provider, model: defaultRow.model })
-  check('models default roundtrip', r.status === 200 && r.json.ok === true, JSON.stringify(r.json))
-}
-const providers = r.json.providers ?? []
-if (providers.length > 0) {
-  const p = providers[0]
-  r = await call('POST', '/manager/api/models/provider', { settingsNs: p.settingsNs, section: { ...p.section } })
-  check('models provider roundtrip', r.status === 200 && r.json.ok === true, JSON.stringify(r.json))
-} else {
-  console.log('SKIP provider update (no configurable providers)') ; pass++
-}
+check('models endpoints removed (404)', r.status === 404, JSON.stringify(r.json))
 
 // 9. theme
 r = await call('GET', '/manager/api/theme')
