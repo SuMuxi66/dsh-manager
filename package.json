@@ -1,6 +1,6 @@
 {
   "name": "dsh-manager",
-  "description": "DSH Manager — plugin management console for DeepSeek Harness: plugin list/enable/disable/uninstall, plugin market (browse + one-click install), skills & MCP management (M2). Dual-face plugin: host half serves /manager JSON APIs, browser half renders the sidebar console.",
+  "description": "DSH Manager — management console for DeepSeek Harness: plugins (list/enable/disable/uninstall + market), skills, MCP servers, credential keys, model providers, theme/skins. Dual-face plugin: host half serves /manager JSON APIs, browser half renders the sidebar console.",
   "version": "0.1.0",
   "publishConfig": {
     "access": "public"
@@ -49,6 +49,9 @@
     "cordis.patch.yml"
   ],
   "license": "MIT",
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "react": "^18.2.0"

@@ -1,7 +1,8 @@
 /**
  * dsh-manager browser half: registers the sidebar footer entry and renders
  * the manager console overlay. All data flows over the same-origin /manager
- * JSON APIs served by the host half — no private harness internals.
+ * JSON APIs served by the host half — no private harness internals. Tabs:
+ * 插件 / 市场 (M1), Skills / MCP (M2), Keys / 模型 / 皮肤 (M3).
  * @module dsh-manager/client
  */
 import { Context } from '@deepseek-ai/cordis';

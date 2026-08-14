@@ -1,10 +1,12 @@
 /**
- * dsh-manager host half: serves the /manager JSON APIs — plugin inventory
- * (live loader state), runtime enable/disable (loader.create/remove), and
- * persistent install/uninstall by forwarding to the `dsh plugin` CLI in the
- * active profile. The plugin market endpoint returns the built-in curated
- * list, optionally refreshed from the GitHub dsh-plugin topic (proxy via
- * `DSH_MANAGER_GITHUB_PROXY`).
+ * dsh-manager host half: serves the /manager JSON APIs —
+ * M1: plugin inventory (live loader state), runtime enable/disable, persistent
+ *     install/uninstall by forwarding to the `dsh plugin` CLI, plugin market.
+ * M2: skills catalog (list/detail/install/uninstall into the user agents
+ *     home), MCP server configuration (managed block in the profile patch).
+ * M3: credential keys (describe/set/unset — never echoes values), model
+ *     provider settings (default model + configurable providers), theme
+ *     preference and skin rows.
  * @module dsh-manager
  */
 import type { Context } from '@deepseek-ai/cordis';
