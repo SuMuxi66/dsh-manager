@@ -24,12 +24,16 @@ if (await later.count()) {
   console.log('INFO closed onboarding')
 }
 
-// 2. open manager console via gear button
-const gear = page.locator('button', { hasText: '⚙' }).first()
-check('gear button visible', await gear.isVisible())
-await gear.click()
+// 2. open the manager console through the official settings panel
+const settingsBtn = page.locator('button', { hasText: '设置' }).first()
+check('official settings button visible', await settingsBtn.isVisible())
+await settingsBtn.click()
+await page.waitForTimeout(1500)
+const mgrNav = page.locator('text=管理控制台').first()
+check('manager page entry in settings nav', (await page.locator('text=管理控制台').count()) > 0)
+await mgrNav.click({ force: true })
 await page.waitForTimeout(1200)
-check('manager console opens', await page.locator('.dshm-panel').first().isVisible())
+check('manager page opens in settings', await page.locator('.dshm-page').first().isVisible())
 check('console title', (await page.locator('.dshm-head h2').textContent()).includes('DSH 管理控制台'))
 await page.screenshot({ path: OUT + '-1-console.png' })
 

@@ -1,8 +1,8 @@
 # dsh-manager · DSH 管理控制台
 
-DeepSeek Harness 的**统一管理控制台**（双面插件）：官方设置面板内嵌「管理控制台」
-页面 + 侧边栏 ⚙ 快捷入口，提供插件管理、插件市场、Skills 管理、MCP 管理
-（含开源商店）与主题/皮肤管理。Web 端与桌面端通用（共享 `~/.dsh/profiles/web`）。
+DeepSeek Harness 的**统一管理控制台**（双面插件）：**官方设置面板内嵌「管理控制台」
+页面**（侧边栏「设置」→ 左侧页面列表），提供插件管理、插件市场、Skills 管理、
+MCP 管理（含开源商店）与主题/皮肤管理。Web 端与桌面端通用（共享 `~/.dsh/profiles/web`）。
 
 ## 安装
 
@@ -13,9 +13,7 @@ npx @deepseek-ai/dsh plugin --profile web add github:SuMuxi66/dsh-manager
 npx @deepseek-ai/dsh plugin --profile web add link:<本仓库路径>
 ```
 
-重启 web / 桌面端后：
-- 侧边栏底部 ⚙ 快捷入口（悬浮面板）
-- **侧边栏「设置」→ 左侧页面列表出现「管理控制台」**（官方设置面板内嵌）
+重启 web / 桌面端后：侧边栏「设置」→ 左侧页面列表出现「管理控制台」。
 
 ## 功能
 
@@ -53,9 +51,9 @@ npm run build        # tsc + tsdown → lib/（index.js host 半 + client.js 浏
   通过 `ctx.loader`、`ctx.settings` 读写运行时状态，转发 `dsh plugin`
   子进程做持久变更，MCP 配置写入 profile 的托管 patch 块（`# --- dsh-manager mcp
   managed ---`），商店数据来自 Smithery 公开 registry（60s 内存缓存）。
-- **Client 半**（`src/client/index.tsx`）：注册 `sidebar.footer.action`（⚙ 悬浮面板快捷入口）
-  与官方 **`settings.section`**（设置面板内嵌「管理控制台」页面）两个槽位，
-  共享同一个 ManagerPanel，数据走同源 `/manager/api` JSON API。
+- **Client 半**（`src/client/index.tsx`）：注册官方 **`settings.section`** 槽位
+  （设置面板内嵌「管理控制台」页面），渲染 ManagerPanel，数据走同源
+  `/manager/api` JSON API。
 
 ## 已知限制
 

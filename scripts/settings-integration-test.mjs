@@ -55,7 +55,7 @@ if (navCount > 0) {
 
   // the manager page renders tabs + plugins
   const bodyText = await page.locator('body').textContent()
-  check('manager page renders tabs', bodyText.includes('插件') && bodyText.includes('市场') && bodyText.includes('Skills') && bodyText.includes('MCP') && bodyText.includes('Keys') && bodyText.includes('模型') && bodyText.includes('皮肤'))
+  check('manager page renders tabs', bodyText.includes('插件') && bodyText.includes('市场') && bodyText.includes('Skills') && bodyText.includes('MCP') && bodyText.includes('皮肤'))
   check('manager page renders plugin rows', (await page.locator('.dshm-row').count()) > 10)
 
   // switch to Skills tab inside the settings page
@@ -78,19 +78,13 @@ if (navCount > 0) {
   check('theme tab works in settings page', themeBody.includes('浅色') && themeBody.includes('深色'))
   await page.screenshot({ path: OUT + '-5-manager-theme.png' })
 
-  // close the settings panel (Escape) and confirm the gear overlay shortcut
-  // still works
+  // no sidebar gear shortcut remains (console lives inside settings only)
+  const gear = page.locator('button', { hasText: '⚙' })
+  check('sidebar gear shortcut removed', (await gear.count()) === 0, 'count=' + (await gear.count()))
+
+  // close the settings panel (Escape)
   await page.keyboard.press('Escape')
   await page.waitForTimeout(800)
-  const gear = page.locator('button', { hasText: '⚙' }).first()
-  if (await gear.count()) {
-    await gear.click()
-    await page.waitForTimeout(1000)
-    check('gear overlay still opens', await page.locator('.dshm-panel').first().isVisible())
-    await page.screenshot({ path: OUT + '-6-gear-overlay.png' })
-  } else {
-    console.log('SKIP gear overlay (no ⚙ button)')
-  }
 } else {
   console.log('SKIP page interaction (no 管理控制台 nav entry)')
 }

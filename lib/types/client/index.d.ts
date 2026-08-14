@@ -16,8 +16,8 @@ interface ManagerCtx extends Context {
 /** Required services: the slot registry (declaration may come later). */
 export declare const inject: string[];
 /**
- * Plugin body: register the sidebar footer entry AND the official settings
- * panel page once their slots declare.
+ * Plugin body: register the official settings panel page once its slot
+ * declares (sidebar 设置 → left page list → 管理控制台).
  * @param ctx - client root context (slots injected).
  */
 export declare function apply(ctx: ManagerCtx): void;
