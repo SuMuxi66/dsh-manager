@@ -13,7 +13,7 @@
 
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
@@ -117,8 +117,9 @@ function parseSkillMeta(content: string): { name?: string; description?: string 
 
 /**
  * Scan the filesystem skill roots the same way the local skill provider does:
- * user-dsh ($DSH_HOME/skills), user-agents (agents home skills), and the
- * bundled directory when configured. Project roots are omitted (no workspace).
+ * user-dsh ($DSH_HOME/skills), user-agents (agents home skills), bundled
+ * directory (env), plus auto-discovered dsh-installed presets and user
+ * agent-presets. Project roots are omitted (no workspace).
  */
 async function scanSkills(): Promise<Array<{ name: string; description: string; path: string; source: string; provider: string }>> {
   const { readdir } = await import('node:fs/promises')
@@ -126,8 +127,36 @@ async function scanSkills(): Promise<Array<{ name: string; description: string; 
     { path: join(dshHome(), 'skills'), source: 'user-dsh' },
     { path: join(agentsHome(), 'skills'), source: 'user-agents' },
   ]
+  // Env-configured bundled
   const bundled = process.env.DSH_BUNDLED_SKILL_DIR
   if (bundled !== undefined && bundled !== '') roots.push({ path: bundled, source: 'bundled' })
+  // Auto-discover dsh-installed preset skills (e.g. cordis preset)
+  try {
+    const dshPkg = require.resolve('@deepseek-ai/dsh/package.json')
+    const presetsDir = join(dirname(dshPkg), 'config', 'agent-presets')
+    const presetDirs = await readdir(presetsDir, { withFileTypes: true })
+    for (const entry of presetDirs) {
+      if (entry.isDirectory()) {
+        const skillDir = join(presetsDir, entry.name, 'skills')
+        roots.push({ path: skillDir, source: 'bundled' })
+      }
+    }
+  } catch {
+    // dsh package not resolvable — skip
+  }
+  // Auto-discover user agent-presets skills
+  const userPresets = join(dshHome(), '.agent-presets')
+  try {
+    const presetDirs = await readdir(userPresets, { withFileTypes: true })
+    for (const entry of presetDirs) {
+      if (entry.isDirectory()) {
+        const skillDir = join(userPresets, entry.name, 'skills')
+        roots.push({ path: skillDir, source: 'user-presets' })
+      }
+    }
+  } catch {
+    // no user presets — skip
+  }
   const out: Array<{ name: string; description: string; path: string; source: string; provider: string }> = []
   for (const root of roots) {
     let entries
@@ -730,6 +759,38 @@ export function apply(ctx: Context): void {
           const target = found.path.endsWith(`${sep}SKILL.md`) ? dirname(found.path) : found.path
           await rm(target, { recursive: true, force: true })
           json(res, 200, { ok: true })
+          return
+        }
+        // POST /manager/api/skills/import-all — scan every known skill root
+        // on this machine and import skills not already present in the user
+        // skills directory (~/.dsh/skills), skipping duplicates by name.
+        if (req.method === 'POST' && path === '/manager/api/skills/import-all') {
+          const targetDir = join(dshHome(), 'skills')
+          await mkdir(targetDir, { recursive: true })
+          const existing = new Set((await scanSkills()).filter((s) => s.source === 'user-dsh').map((s) => s.name))
+          const candidates = await scanSkills()
+          const imported: string[] = []
+          const skipped: Array<{ name: string; reason: string }> = []
+          const errors: string[] = []
+          for (const skill of candidates) {
+            if (skill.source === 'user-dsh') continue // already in the target
+            if (existing.has(skill.name)) {
+              skipped.push({ name: skill.name, reason: '已存在同名技能' })
+              continue
+            }
+            try {
+              // A directory bundle lives in <root>/<name>/SKILL.md; a flat
+              // markdown file lives at <root>/<name>.md. Copy accordingly.
+              const sourceDir = skill.path.endsWith(`${sep}SKILL.md`) ? dirname(skill.path) : skill.path
+              const dest = join(targetDir, skill.name)
+              await cp(sourceDir, dest, { recursive: true })
+              existing.add(skill.name)
+              imported.push(skill.name)
+            } catch (error) {
+              errors.push(`${skill.name}: ${error instanceof Error ? error.message : String(error)}`)
+            }
+          }
+          json(res, 200, { ok: true, imported, skipped, errors })
           return
         }
 
