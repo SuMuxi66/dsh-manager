@@ -141,10 +141,38 @@ interface ProviderRow {
   section: Record<string, unknown>
 }
 
-/** Shared fetch helper for the /manager APIs. */
+/** Shared fetch helper for the /manager APIs. Throws on transport failure so
+ * callers can surface a message instead of rendering undefined data. */
 async function managerFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { headers: { 'content-type': 'application/json' }, ...init })
+  if (!res.ok && res.status !== 200) {
+    // the host answers 4xx/5xx with JSON {ok:false,error}
+    try {
+      const body = await res.json() as { error?: string }
+      throw new Error(body.error ?? `HTTP ${res.status}`)
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('HTTP')) throw error
+      throw new Error(`HTTP ${res.status}`)
+    }
+  }
   return await res.json() as T
+}
+
+/** Guards a state-loading call: on failure shows the error instead of crashing. */
+async function loadInto<T>(setter: (v: T) => void, onError: (msg: string) => void, loader: () => Promise<T>): Promise<void> {
+  try {
+    const data = await loader()
+    // API responses carry ok; require it so a missing/old host route surfaces
+    // a readable message instead of undefined state crashing the render.
+    if (data !== null && typeof data === 'object' && 'ok' in (data as object) && (data as { ok?: boolean }).ok !== true) {
+      const err = (data as { error?: string }).error ?? 'unknown error'
+      onError(`API 错误：${err}`)
+      return
+    }
+    setter(data)
+  } catch (error) {
+    onError(error instanceof Error ? error.message : String(error))
+  }
 }
 
 type Tab = 'plugins' | 'market' | 'skills' | 'mcp' | 'keys' | 'models' | 'theme'
@@ -186,9 +214,15 @@ function PluginsTab({ busy, setBusy, msg, setMsg }: {
   const [loading, setLoading] = useState(true)
 
   const refresh = async (): Promise<void> => {
-    const data = await managerFetch<{ ok: boolean; profile: string; plugins: PluginRow[] }>('/manager/api/plugins')
-    setProfile(data.profile)
-    setPlugins(data.plugins)
+    await loadInto(
+      (data) => { setProfile(data.profile); setPlugins(data.plugins) },
+      (msg) => setMsg({ ok: false, text: msg }),
+      async () => {
+        const data = await managerFetch<{ ok: boolean; profile: string; plugins: PluginRow[] }>('/manager/api/plugins')
+        if (!data.ok) throw new Error(data.ok === undefined ? 'host 端未加载 dsh-manager（请重启 web/桌面端）' : 'plugins API 错误')
+        return data
+      },
+    )
   }
   useEffect(() => { void refresh().then(() => setLoading(false)) }, [])
 
@@ -257,8 +291,15 @@ function MarketTab({ busy, setBusy, msg, setMsg }: {
   const [market, setMarket] = useState<MarketRow[]>([])
 
   const load = async (): Promise<void> => {
-    const data = await managerFetch<{ ok: boolean; plugins: MarketRow[] }>('/manager/api/market')
-    setMarket(data.plugins)
+    await loadInto(
+      (data) => setMarket(data.plugins),
+      (msg) => setMsg({ ok: false, text: msg }),
+      async () => {
+        const data = await managerFetch<{ ok: boolean; plugins: MarketRow[] }>('/manager/api/market')
+        if (!data.ok) throw new Error(data.ok === undefined ? 'host 端未加载 dsh-manager（请重启 web/桌面端）' : 'market API 错误')
+        return data
+      },
+    )
   }
   useEffect(() => { void load() }, [])
 
@@ -304,8 +345,15 @@ function SkillsTab({ busy, setBusy, msg, setMsg }: {
   const [newContent, setNewContent] = useState('')
 
   const refresh = async (): Promise<void> => {
-    const data = await managerFetch<{ ok: boolean; skills: SkillRow[] }>('/manager/api/skills')
-    setSkills(data.skills)
+    await loadInto(
+      (data) => setSkills(data.skills),
+      (msg) => setMsg({ ok: false, text: msg }),
+      async () => {
+        const data = await managerFetch<{ ok: boolean; skills: SkillRow[] }>('/manager/api/skills')
+        if (!data.ok) throw new Error(data.ok === undefined ? 'host 端未加载 dsh-manager（请重启 web/桌面端）' : 'skills API 错误')
+        return data
+      },
+    )
   }
   useEffect(() => { void refresh().then(() => setLoading(false)) }, [])
 
@@ -397,8 +445,15 @@ function McpTab({ busy, setBusy, msg, setMsg }: {
   const [editing, setEditing] = useState<McpServer | null>(null)
 
   const refresh = async (): Promise<void> => {
-    const data = await managerFetch<{ ok: boolean; servers: McpServer[] }>('/manager/api/mcp')
-    setServers(data.servers)
+    await loadInto(
+      (data) => setServers(data.servers),
+      (msg) => setMsg({ ok: false, text: msg }),
+      async () => {
+        const data = await managerFetch<{ ok: boolean; servers: McpServer[] }>('/manager/api/mcp')
+        if (!data.ok) throw new Error(data.ok === undefined ? 'host 端未加载 dsh-manager（请重启 web/桌面端）' : 'mcp API 错误')
+        return data
+      },
+    )
   }
   useEffect(() => { void refresh().then(() => setLoading(false)) }, [])
 
@@ -580,9 +635,15 @@ function KeysTab({ busy, setBusy, msg, setMsg }: {
   const [setValue, setSetValue] = useState('')
 
   const refresh = async (): Promise<void> => {
-    const data = await managerFetch<{ ok: boolean; available: boolean; keys: KeyRow[] }>('/manager/api/keys')
-    setAvailable(data.available)
-    setKeys(data.keys)
+    await loadInto(
+      (data) => { setAvailable(data.available); setKeys(data.keys) },
+      (msg) => setMsg({ ok: false, text: msg }),
+      async () => {
+        const data = await managerFetch<{ ok: boolean; available: boolean; keys: KeyRow[] }>('/manager/api/keys')
+        if (!data.ok) throw new Error(data.ok === undefined ? 'host 端未加载 dsh-manager（请重启 web/桌面端）' : 'keys API 错误')
+        return data
+      },
+    )
   }
   useEffect(() => { void refresh().then(() => setLoading(false)) }, [])
 
@@ -661,14 +722,23 @@ function ModelsTab({ busy, setBusy, msg, setMsg }: {
   const [editApiKeyEnv, setEditApiKeyEnv] = useState('')
 
   const refresh = async (): Promise<void> => {
-    const data = await managerFetch<{ ok: boolean; default: Record<string, unknown> | null; providers: ProviderRow[] }>('/manager/api/models')
-    setDefaults(data.default)
-    setProviders(data.providers)
-    if (data.default !== null) {
-      setDefProvider(String(data.default.provider ?? ''))
-      setDefModel(String(data.default.model ?? ''))
-      setDefEffort(String(data.default.reasoningEffort ?? ''))
-    }
+    await loadInto(
+      (data) => {
+        setDefaults(data.default)
+        setProviders(data.providers)
+        if (data.default !== null) {
+          setDefProvider(String(data.default.provider ?? ''))
+          setDefModel(String(data.default.model ?? ''))
+          setDefEffort(String(data.default.reasoningEffort ?? ''))
+        }
+      },
+      (msg) => setMsg({ ok: false, text: msg }),
+      async () => {
+        const data = await managerFetch<{ ok: boolean; default: Record<string, unknown> | null; providers: ProviderRow[] }>('/manager/api/models')
+        if (!data.ok) throw new Error(data.ok === undefined ? 'host 端未加载 dsh-manager（请重启 web/桌面端）' : 'models API 错误')
+        return data
+      },
+    )
   }
   useEffect(() => { void refresh().then(() => setLoading(false)) }, [])
 
@@ -778,9 +848,15 @@ function ThemeTab({ busy, setBusy, msg, setMsg }: {
   const [loading, setLoading] = useState(true)
 
   const refresh = async (): Promise<void> => {
-    const data = await managerFetch<{ ok: boolean; preference: string; skins: PluginRow[] }>('/manager/api/theme')
-    setPreference(data.preference)
-    setSkins(data.skins)
+    await loadInto(
+      (data) => { setPreference(data.preference); setSkins(data.skins) },
+      (msg) => setMsg({ ok: false, text: msg }),
+      async () => {
+        const data = await managerFetch<{ ok: boolean; preference: string; skins: PluginRow[] }>('/manager/api/theme')
+        if (!data.ok) throw new Error(data.ok === undefined ? 'host 端未加载 dsh-manager（请重启 web/桌面端）' : 'theme API 错误')
+        return data
+      },
+    )
   }
   useEffect(() => { void refresh().then(() => setLoading(false)) }, [])
 
