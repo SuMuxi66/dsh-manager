@@ -58,6 +58,27 @@ if (await detailBtn.count()) {
 } else {
   console.log('SKIP skill detail (no rows)')
 }
+// skill md file import
+import { writeFileSync, unlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+const importName = 'ui-import-' + Date.now().toString(36)
+const tmpMd = join(tmpdir(), importName + '.md')
+writeFileSync(tmpMd, '---\nname: ' + importName + '\ndescription: ui e2e imported skill\n---\n\n# UI import test\nWorks.')
+const fileInput = page.locator('input[type="file"]')
+await fileInput.setInputFiles(tmpMd)
+await page.waitForTimeout(1500)
+const skillsTextAfter = await page.locator('.dshm-body').textContent()
+check('skill import via file works', skillsTextAfter.includes('已导入') && skillsTextAfter.includes(importName), skillsTextAfter.slice(0, 250))
+check('imported skill in list', skillsTextAfter.includes(importName))
+await page.screenshot({ path: OUT + '-2b-skill-import.png' })
+// uninstall the imported skill via UI
+const importRow = page.locator('.dshm-row', { hasText: importName }).first()
+if (await importRow.count()) {
+  await importRow.locator('button.danger', { hasText: '卸载' }).click()
+  await page.waitForTimeout(1200)
+}
+unlinkSync(tmpMd)
 
 // 5. MCP tab
 await page.locator('.dshm-tab', { hasText: 'MCP' }).click()
@@ -70,42 +91,42 @@ check('mcp shows running badge', mcpText.includes('运行中') || mcpText.includ
 check('mcp shows server name', mcpText.includes('browser'))
 await page.screenshot({ path: OUT + '-3-mcp.png' })
 // add-server form opens
-await page.locator('.dshm-btn.primary', { hasText: '新增 MCP 服务器' }).click()
+await page.locator('.dshm-btn', { hasText: '+ 新增' }).click()
 await page.waitForTimeout(400)
 check('mcp add form opens', await page.locator('.dshm-form').first().isVisible())
 await page.locator('.dshm-form button', { hasText: '取消' }).click()
 await page.waitForTimeout(300)
+// MCP market view
+await page.locator('.dshm-btn', { hasText: '开源商店' }).click()
+// wait for the store search to settle (loading text disappears)
+await page.waitForFunction(() => {
+  const body = document.querySelector('.dshm-body')
+  return body !== null && !body.textContent.includes('搜索中…')
+}, null, { timeout: 40000 }).catch(() => {})
+await page.waitForTimeout(500)
+const marketBody = await page.locator('.dshm-body').textContent()
+check('mcp market view renders', marketBody.includes('Smithery') || marketBody.includes('开源商店'))
+const mcpMarketCards = await page.locator('.dshm-card').count()
+check('mcp market lists servers', mcpMarketCards > 0, 'cards=' + mcpMarketCards)
+await page.screenshot({ path: OUT + '-4-mcp-market.png' })
+// search in the store
+const searchInput = page.locator('.dshm-input').first()
+await searchInput.fill('github')
+await page.locator('.dshm-btn.primary', { hasText: '搜索' }).click()
+await page.waitForFunction(() => {
+  const body = document.querySelector('.dshm-body')
+  return body !== null && !body.textContent.includes('搜索中…')
+}, null, { timeout: 40000 }).catch(() => {})
+await page.waitForTimeout(500)
+const marketBody2 = await page.locator('.dshm-body').textContent()
+check('mcp market search works', marketBody2.includes('GitHub') || (await page.locator('.dshm-card').count()) > 0, marketBody2.slice(0, 200))
+const installBtns = await page.locator('.dshm-card button', { hasText: '安装' }).count()
+check('mcp market install buttons present', installBtns >= 1, 'btns=' + installBtns)
+// back to configured
+await page.locator('.dshm-btn', { hasText: '已配置' }).click()
+await page.waitForTimeout(800)
 
-// 6. keys tab
-await page.locator('.dshm-tab', { hasText: 'Keys' }).click()
-await page.waitForTimeout(1200)
-const keysText = await page.locator('.dshm-body').textContent()
-check('keys lists refs', keysText.includes('DEEPSEEK_API_KEY'), keysText.slice(0, 200))
-check('keys never shows a stored value', !keysText.includes('secret-value-123'))
-// set a key via the form
-const refInput = page.locator('.dshm-sec input').first()
-const valueInput = page.locator('.dshm-sec input[type="password"]').first()
-await refInput.fill('DEEPSEEK_API_KEY')
-await valueInput.fill('ui-e2e-secret-456')
-await page.locator('.dshm-btn.primary', { hasText: '保存' }).first().click()
-await page.waitForTimeout(1200)
-const keysText2 = await page.locator('.dshm-body').textContent()
-check('key set ok message', keysText2.includes('已保存'))
-check('key now configured', keysText2.includes('已配置'))
-check('no value leak after set', !keysText2.includes('ui-e2e-secret-456'))
-await page.screenshot({ path: OUT + '-4-keys.png' })
-// clear it
-const clearBtn = page.locator('.dshm-row button.danger', { hasText: '清除' }).first()
-if (await clearBtn.count()) {
-  await clearBtn.click()
-  await page.waitForTimeout(1200)
-  const keysText3 = await page.locator('.dshm-body').textContent()
-  check('key cleared', keysText3.includes('未配置'))
-} else {
-  console.log('SKIP key clear (no writable row)')
-}
-
-// 7. models tab
+// 6. models tab
 await page.locator('.dshm-tab', { hasText: '模型' }).click()
 await page.waitForTimeout(1200)
 const modelsText = await page.locator('.dshm-body').textContent()
@@ -113,7 +134,7 @@ check('models shows default provider', modelsText.includes('deepseek-official'))
 check('models shows providers', modelsText.includes('llm-pi-ai') || modelsText.includes('llm-deepseek'))
 await page.screenshot({ path: OUT + '-5-models.png' })
 
-// 8. theme tab
+// 7. theme tab
 await page.locator('.dshm-tab', { hasText: '皮肤' }).click()
 await page.waitForTimeout(1200)
 const themeText = await page.locator('.dshm-body').textContent()
@@ -128,9 +149,10 @@ const themeText2 = await page.locator('.dshm-body').textContent()
 check('theme switch works', themeText2.includes('主题已切换'))
 await page.screenshot({ path: OUT + '-6-theme.png' })
 
-// 9. market tab still fine
+// 8. market tab still fine (live GitHub fetch may take up to 15s; curated
+// fallback renders afterwards)
 await page.locator('.dshm-tab', { hasText: '市场' }).click()
-await page.waitForTimeout(1500)
+await page.waitForFunction(() => document.querySelectorAll('.dshm-card').length > 5, null, { timeout: 45000 }).catch(() => {})
 const marketCards = page.locator('.dshm-card')
 check('market tab renders cards', (await marketCards.count()) > 5)
 

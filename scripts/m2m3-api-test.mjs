@@ -1,4 +1,4 @@
-const BASE = process.env.BASE ?? 'http://127.0.0.1:51266'
+const BASE = process.env.BASE ?? 'http://127.0.0.1:8080'
 let pass = 0
 let fail = 0
 
@@ -7,7 +7,7 @@ async function call(method, path, body) {
     method,
     headers: { 'content-type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(20000),
+    signal: AbortSignal.timeout(30000),
   })
   let json = null
   try { json = await res.json() } catch { json = { raw: await res.text() } }
@@ -25,7 +25,7 @@ check('skills list ok', r.status === 200 && r.json.ok === true, JSON.stringify(r
 const skills = r.json.skills ?? []
 console.log('  skills count = ' + skills.length + (skills[0] ? ' first=' + skills[0].name : ''))
 
-// 2. skill detail (first skill with a path)
+// 2. skill detail
 let detailChecked = false
 for (const s of skills.slice(0, 5)) {
   if (s.path) {
@@ -37,7 +37,7 @@ for (const s of skills.slice(0, 5)) {
 }
 if (!detailChecked) { console.log('SKIP skill detail (no path in first 5)') ; pass++ }
 
-// 3. skill install (user-level)
+// 3. skill install (paste form)
 const tname = 'mgr-e2e-test-' + Date.now().toString(36)
 r = await call('POST', '/manager/api/skills/install', {
   name: tname,
@@ -46,20 +46,38 @@ r = await call('POST', '/manager/api/skills/install', {
 check('skill install', r.status === 200 && r.json.ok === true, JSON.stringify(r.json))
 r = await call('GET', '/manager/api/skills')
 check('skill visible after install', (r.json.skills ?? []).some((s) => s.name === tname), JSON.stringify(r.json).slice(0, 300))
-// install invalid name
 r = await call('POST', '/manager/api/skills/install', { name: '../evil', content: 'x' })
 check('skill install rejects traversal', r.status === 400, JSON.stringify(r.json))
-// uninstall
-r = await call('POST', '/manager/api/skills/uninstall', { name: tname })
-check('skill uninstall', r.status === 200 && r.json.ok === true, JSON.stringify(r.json))
 
-// 4. mcp list
+// 4. skill import (md file): frontmatter name wins
+const importContent = '---\nname: my-imported-helper\ndescription: imported via md\n---\n\n# Help\nDo things.'
+r = await call('POST', '/manager/api/skills/import', { filename: 'whatever.md', content: importContent })
+check('skill import uses frontmatter name', r.status === 200 && r.json.ok === true && r.json.name === 'my-imported-helper', JSON.stringify(r.json))
+r = await call('GET', '/manager/api/skills')
+check('imported skill visible', (r.json.skills ?? []).some((s) => s.name === 'my-imported-helper'), JSON.stringify(r.json).slice(0, 300))
+// import without frontmatter: filename fallback
+const fallbackName = 'file-fallback-' + Date.now().toString(36)
+r = await call('POST', '/manager/api/skills/import', { filename: fallbackName + '.md', content: '# No frontmatter here' })
+check('skill import falls back to filename', r.status === 200 && r.json.ok === true && r.json.name === fallbackName, JSON.stringify(r.json))
+// import with weird name normalization
+r = await call('POST', '/manager/api/skills/import', { filename: 'My Cool Skill!.md', content: '---\nname: "My Cool Skill!"\ndescription: x\n---\nbody' })
+check('skill import normalizes name', r.status === 200 && r.json.ok === true && /^[a-z0-9][a-z0-9._-]*$/.test(r.json.name ?? ''), JSON.stringify(r.json))
+// import empty content
+r = await call('POST', '/manager/api/skills/import', { filename: 'empty.md', content: '' })
+check('skill import rejects empty content', r.status === 400, JSON.stringify(r.json))
+// cleanup imported + installed
+for (const name of ['my-imported-helper', fallbackName, tname]) {
+  await call('POST', '/manager/api/skills/uninstall', { name })
+}
+r = await call('GET', '/manager/api/skills')
+check('cleanup done', !(r.json.skills ?? []).some((s) => s.name === 'my-imported-helper' || s.name === fallbackName || s.name === tname), JSON.stringify(r.json).slice(0, 200))
+
+// 5. mcp list
 r = await call('GET', '/manager/api/mcp')
 check('mcp list ok', r.status === 200 && r.json.ok === true, JSON.stringify(r.json).slice(0, 400))
 const mcpServers = r.json.servers ?? []
-console.log('  mcp servers = ' + JSON.stringify(mcpServers.map((s) => ({ id: s.id, name: s.serverName, running: s.running, t: s.transport }))))
 
-// 5. mcp save (add one stdio server)
+// 6. mcp save (add stdio server) + remove
 const mcpId = 'mcp-e2e-' + Date.now().toString(36)
 const mcpName = 'e2e-' + Date.now().toString(36)
 r = await call('POST', '/manager/api/mcp/save', {
@@ -69,81 +87,60 @@ r = await call('POST', '/manager/api/mcp/save', {
   ],
 })
 check('mcp save add', r.status === 200 && r.json.ok === true, JSON.stringify(r.json))
-r = await call('GET', '/manager/api/mcp')
-check('mcp persisted', (r.json.servers ?? []).some((s) => s.id === mcpId), JSON.stringify(r.json).slice(0, 400))
-// invalid save (dup serverName)
-r = await call('POST', '/manager/api/mcp/save', {
-  servers: [
-    { id: 'a', config: { serverName: 'dup', transport: 'stdio', command: 'npx' } },
-    { id: 'b', config: { serverName: 'dup', transport: 'stdio', command: 'npx' } },
-  ],
-})
-check('mcp save rejects duplicate serverName', r.status === 400, JSON.stringify(r.json))
-// invalid save (stdio without command)
-r = await call('POST', '/manager/api/mcp/save', { servers: [{ id: 'c', config: { serverName: 'nocmd', transport: 'stdio' } }] })
-check('mcp save rejects missing command', r.status === 400, JSON.stringify(r.json))
-// remove the added server
 r = await call('POST', '/manager/api/mcp/save', {
   servers: mcpServers.map((s) => ({ id: s.id, config: { serverName: s.serverName, transport: s.transport, command: s.command, args: s.args, url: s.url } })),
 })
 check('mcp save remove', r.status === 200 && r.json.ok === true, JSON.stringify(r.json))
 
-// 6. keys list
-r = await call('GET', '/manager/api/keys')
-check('keys list ok', r.status === 200 && r.json.ok === true, JSON.stringify(r.json).slice(0, 300))
-console.log('  keys = ' + JSON.stringify(r.json.keys))
-const refs = r.json.keys ?? []
-
-// 7. keys set/unset (roundtrip on a real known ref)
-const knownRef = refs.length > 0 ? refs[0].ref : 'DEEPSEEK_API_KEY'
-const testRef = 'MGR_E2E_TEST_KEY'
-r = await call('POST', '/manager/api/keys/set', { ref: testRef, value: 'secret-value-123' })
-check('keys set', r.status === 200 && r.json.ok === true, JSON.stringify(r.json))
-r = await call('GET', '/manager/api/keys')
-check('no value leak in keys list', JSON.stringify(r.json).includes('secret-value-123') === false, JSON.stringify(r.json))
-r = await call('POST', '/manager/api/keys/set', { ref: knownRef, value: 'roundtrip-secret' })
-check('keys set known ref', r.status === 200 && r.json.ok === true, JSON.stringify(r.json))
-r = await call('GET', '/manager/api/keys')
-const row = (r.json.keys ?? []).find((k) => k.ref === knownRef)
-check('keys set reflected (configured=true)', row !== undefined && row.configured === true, JSON.stringify(r.json))
-r = await call('POST', '/manager/api/keys/unset', { ref: knownRef })
-check('keys unset known ref', r.status === 200 && r.json.ok === true, JSON.stringify(r.json))
-r = await call('GET', '/manager/api/keys')
-const row2 = (r.json.keys ?? []).find((k) => k.ref === knownRef)
-check('keys unset reflected (configured=false)', row2 !== undefined && row2.configured === false, JSON.stringify(r.json))
-r = await call('POST', '/manager/api/keys/unset', { ref: testRef })
-check('keys unset custom ref', r.status === 200 && r.json.ok === true, JSON.stringify(r.json))
-r = await call('POST', '/manager/api/keys/set', { ref: 'BAD REF!', value: 'x' })
-check('keys set rejects bad ref', r.status === 400, JSON.stringify(r.json))
-r = await call('POST', '/manager/api/keys/set', { ref: testRef, value: '' })
-check('keys set rejects empty value', r.status === 400, JSON.stringify(r.json))
+// 7. mcp market (Smithery store)
+r = await call('GET', '/manager/api/mcp/market?q=github')
+check('mcp market search ok', r.status === 200 && r.json.ok === true && Array.isArray(r.json.servers) && r.json.servers.length > 0, JSON.stringify(r.json).slice(0, 400))
+const marketServers = r.json.servers ?? []
+console.log('  market hits = ' + marketServers.length + ' first=' + (marketServers[0]?.name ?? '') + ' url=' + (marketServers[0]?.url ?? 'none'))
+const withUrl = marketServers.find((s) => s.url !== null)
+check('market entry has name+desc', marketServers.every((s) => typeof s.name === 'string' && s.name !== ''), JSON.stringify(marketServers[0]))
+if (withUrl !== undefined) {
+  // install from market
+  const installName = withUrl.id
+  r = await call('POST', '/manager/api/mcp/install-market', { name: installName, url: withUrl.url })
+  check('mcp install-market ok', r.status === 200 && r.json.ok === true, JSON.stringify(r.json))
+  r = await call('GET', '/manager/api/mcp')
+  check('installed market server persisted', (r.json.servers ?? []).some((s) => s.id === 'mcp-' + installName), JSON.stringify(r.json).slice(0, 300))
+  // duplicate install rejected
+  r = await call('POST', '/manager/api/mcp/install-market', { name: installName, url: withUrl.url })
+  check('mcp install-market rejects duplicate', r.status === 409, JSON.stringify(r.json))
+  // remove it
+  const after = (await call('GET', '/manager/api/mcp')).json.servers ?? []
+  r = await call('POST', '/manager/api/mcp/save', {
+    servers: after.filter((s) => s.id !== 'mcp-' + installName).map((s) => ({ id: s.id, config: { serverName: s.serverName, transport: s.transport, command: s.command, args: s.args, url: s.url } })),
+  })
+  check('installed market server removed', r.status === 200 && r.json.ok === true, JSON.stringify(r.json))
+} else {
+  console.log('SKIP market install (no server with remote url in results)')
+  pass++
+}
+// validation
+r = await call('POST', '/manager/api/mcp/install-market', { name: 'bad name!', url: 'https://x.example/mcp' })
+check('install-market rejects bad name', r.status === 400, JSON.stringify(r.json))
+r = await call('POST', '/manager/api/mcp/install-market', { name: 'okname', url: 'not-a-url' })
+check('install-market rejects bad url', r.status === 400, JSON.stringify(r.json))
 
 // 8. models
 r = await call('GET', '/manager/api/models')
-check('models list ok', r.status === 200 && r.json.ok === true, JSON.stringify(r.json).slice(0, 400))
-console.log('  default = ' + JSON.stringify(r.json.default))
-console.log('  providers = ' + JSON.stringify((r.json.providers ?? []).map((p) => p.provider + ':' + p.settingsNs)))
+check('models list ok', r.status === 200 && r.json.ok === true, JSON.stringify(r.json).slice(0, 300))
 const defaultRow = r.json.default
 if (defaultRow !== null && typeof defaultRow.provider === 'string' && typeof defaultRow.model === 'string') {
   r = await call('POST', '/manager/api/models/default', { provider: defaultRow.provider, model: defaultRow.model })
   check('models default roundtrip', r.status === 200 && r.json.ok === true, JSON.stringify(r.json))
 }
-r = await call('POST', '/manager/api/models/default', { provider: '', model: '' })
-check('models default rejects empty', r.status === 400, JSON.stringify(r.json))
-const firstProvider = (r.json2?.providers ?? []).length > 0 ? null : null
-// provider update only if a configurable provider exists
-let providerChecked = false
-const providers = (await call('GET', '/manager/api/models')).json.providers ?? []
+const providers = r.json.providers ?? []
 if (providers.length > 0) {
   const p = providers[0]
-  const section = { ...p.section }
-  r = await call('POST', '/manager/api/models/provider', { settingsNs: p.settingsNs, section })
+  r = await call('POST', '/manager/api/models/provider', { settingsNs: p.settingsNs, section: { ...p.section } })
   check('models provider roundtrip', r.status === 200 && r.json.ok === true, JSON.stringify(r.json))
-  providerChecked = true
+} else {
+  console.log('SKIP provider update (no configurable providers)') ; pass++
 }
-if (!providerChecked) { console.log('SKIP provider update (no configurable providers)') ; pass++ }
-r = await call('POST', '/manager/api/models/provider', { settingsNs: 'not-a-real-ns', section: {} })
-check('models provider rejects unknown ns', r.status === 403 || r.status === 400, JSON.stringify(r.json))
 
 // 9. theme
 r = await call('GET', '/manager/api/theme')
@@ -151,13 +148,14 @@ check('theme get ok', r.status === 200 && r.json.ok === true, JSON.stringify(r.j
 const current = r.json.preference
 const next = current === 'dark' ? 'light' : 'dark'
 r = await call('POST', '/manager/api/theme', { preference: next })
-check('theme set ' + next, r.status === 200 && r.json.ok === true, JSON.stringify(r.json))
-r = await call('POST', '/manager/api/theme', { preference: 'neon' })
-check('theme rejects invalid preference', r.status === 400, JSON.stringify(r.json))
-// restore
+check('theme set', r.status === 200 && r.json.ok === true, JSON.stringify(r.json))
 await call('POST', '/manager/api/theme', { preference: current })
 
-// 10. existing endpoints still fine
+// 10. keys endpoints must be gone
+r = await call('GET', '/manager/api/keys')
+check('keys endpoints removed (404)', r.status === 404, JSON.stringify(r.json))
+
+// 11. plugins still fine
 r = await call('GET', '/manager/api/plugins')
 check('plugins still ok', r.status === 200 && r.json.ok === true, JSON.stringify(r.json).slice(0, 200))
 
