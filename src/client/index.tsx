@@ -1,8 +1,12 @@
 /**
- * dsh-manager browser half: registers the sidebar footer entry and renders
- * the manager console overlay. All data flows over the same-origin /manager
- * JSON APIs served by the host half — no private harness internals. Tabs:
- * 插件 / 市场 (M1), Skills / MCP (M2), 皮肤 (M3).
+ * dsh-manager browser half: distributes its surfaces across the official
+ * settings panel —
+ *   设置 → 插件 →「插件管理」tab：loader 清单 / 运行时启停 / 持久卸载 / 安装
+ *   设置 → 插件 →「插件市场」tab：GitHub dsh-plugin 市场浏览 + 一键安装
+ *   设置 →「Skills 管理」页：技能目录列表 / 详情 / 新建 / md 导入 / 卸载
+ *   设置 →「MCP 管理」页：已配置 MCP 服务器 + Smithery 开源商店
+ * All data flows over the same-origin /manager JSON APIs served by the host
+ * half — no private harness internals.
  * @module dsh-manager/client
  */
 
@@ -23,7 +27,7 @@ interface ManagerCtx extends Context {
 /** Required services: the slot registry (declaration may come later). */
 export const inject = ['slots']
 
-/** Shared overlay stylesheet, injected once (loader removes plugin-owned tags on unload). */
+/** Shared stylesheet, injected once (loader removes plugin-owned tags on unload). */
 const STYLE_TAG = 'dsh-manager'
 function ensureStyles(): void {
   if (document.querySelector(`style[data-plugin-css="${STYLE_TAG}"]`) !== null) return
@@ -32,6 +36,7 @@ function ensureStyles(): void {
   tag.dataset.pluginCss = STYLE_TAG
   tag.textContent = `
 .dshm-page{display:flex;flex-direction:column;min-height:0;font-family:system-ui,sans-serif;color:#e8eaf0}
+.dshm-page .dshm-tabs{border-radius:12px 12px 0 0}
 .dshm-head{display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid #262a33;background:#15171e}
 .dshm-head h2{margin:0;font-size:15px;font-weight:600;flex:1}
 .dshm-tabs{display:flex;gap:6px;padding:10px 18px 0;border-bottom:1px solid #262a33;flex-wrap:wrap}
@@ -72,7 +77,6 @@ function ensureStyles(): void {
 .dshm-mono{font-family:ui-monospace,Consolas,monospace;font-size:11px;color:#9aa2b1}
 .dshm-detail{border:1px solid #262a33;border-radius:10px;background:#15171e;padding:12px;margin-bottom:10px}
 .dshm-detail pre{white-space:pre-wrap;word-break:break-word;font-size:12px;color:#c8cdd8;max-height:280px;overflow:auto;margin:8px 0 0}
-.dshm-toggle{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#9aa2b1;cursor:pointer}
 `
   document.head.appendChild(tag)
 }
@@ -119,6 +123,16 @@ interface McpServer {
   running: boolean
 }
 
+/** One Smithery store server row. */
+interface MarketServer {
+  id: string
+  name: string
+  description: string
+  verified: boolean
+  useCount: number
+  url: string | null
+}
+
 /** Shared fetch helper for the /manager APIs. Throws on transport failure so
  * callers can surface a message instead of rendering undefined data. A 404
  * with `not found` means the running host process predates this route. */
@@ -140,60 +154,47 @@ async function managerFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return await res.json() as T
 }
 
-/** Guards a state-loading call: on failure shows the error instead of crashing. */
-async function loadInto<T>(setter: (v: T) => void, onError: (msg: string) => void, loader: () => Promise<T>): Promise<void> {
-  try {
-    const data = await loader()
-    // API responses carry ok; require it so a missing/old host route surfaces
-    // a readable message instead of undefined state crashing the render.
-    if (data !== null && typeof data === 'object' && 'ok' in (data as object) && (data as { ok?: boolean }).ok !== true) {
-      const err = (data as { error?: string }).error ?? 'unknown error'
-      onError(`API 错误：${err}`)
-      return
-    }
-    setter(data)
-  } catch (error) {
-    onError(error instanceof Error ? error.message : String(error))
-  }
-}
-
-type Tab = 'plugins' | 'market' | 'skills' | 'mcp' | 'theme'
-
 /** Small status message box. */
 function Msg({ msg }: { msg: { ok: boolean; text: string } | null }): ReactNode {
   return msg === null ? null : <div className={`dshm-msg ${msg.ok ? 'ok' : 'err'}`}>{msg.text}</div>
 }
 
-/** ==================== M1: plugins tab ==================== */
-function PluginsTab({ busy, setBusy, msg, setMsg }: {
-  busy: boolean
-  setBusy: (v: boolean) => void
-  msg: { ok: boolean; text: string } | null
-  setMsg: (v: { ok: boolean; text: string } | null) => void
-}): ReactNode {
+/** Local busy/msg state shared by every page. */
+function useManagerState(): { busy: boolean; setBusy: (v: boolean) => void; msg: { ok: boolean; text: string } | null; setMsg: (v: { ok: boolean; text: string } | null) => void } {
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  return { busy, setBusy, msg, setMsg }
+}
+
+/** ==================== 设置 → 插件 →「插件管理」tab ==================== */
+function PluginsManageTab(props: Record<string, unknown>): ReactNode {
+  const { busy, setBusy, msg, setMsg } = useManagerState()
   const [plugins, setPlugins] = useState<PluginRow[]>([])
   const [profile, setProfile] = useState('web')
   const [spec, setSpec] = useState('')
   const [loading, setLoading] = useState(true)
 
   const refresh = async (): Promise<void> => {
-    await loadInto(
-      (data) => { setProfile(data.profile); setPlugins(data.plugins) },
-      (msg) => setMsg({ ok: false, text: msg }),
-      async () => {
-        const data = await managerFetch<{ ok: boolean; profile: string; plugins: PluginRow[] }>('/manager/api/plugins')
-        if (!data.ok) throw new Error(data.ok === undefined ? 'host 端未加载 dsh-manager（请重启 web/桌面端）' : 'plugins API 错误')
-        return data
-      },
-    )
+    try {
+      const data = await managerFetch<{ ok: boolean; profile: string; plugins: PluginRow[] }>('/manager/api/plugins')
+      if (data.ok !== true) throw new Error(data.ok === undefined ? 'host 端未加载 dsh-manager（请完全重启 web GUI）' : 'plugins API 错误')
+      setProfile(data.profile)
+      setPlugins(data.plugins)
+    } catch (error) {
+      setMsg({ ok: false, text: error instanceof Error ? error.message : String(error) })
+    }
   }
   useEffect(() => { void refresh().then(() => setLoading(false)) }, [])
 
   const toggle = async (row: PluginRow): Promise<void> => {
     setBusy(true)
-    const data = await managerFetch<{ ok: boolean; action: string; error?: string }>(
-      '/manager/api/plugins/toggle', { method: 'POST', body: JSON.stringify({ id: row.id }) })
-    setMsg(data.ok ? { ok: true, text: `${row.name} 已${data.action === 'enabled' ? '启用' : '禁用'}（即时生效）` } : { ok: false, text: data.error ?? 'failed' })
+    try {
+      const data = await managerFetch<{ ok: boolean; action: string; error?: string }>(
+        '/manager/api/plugins/toggle', { method: 'POST', body: JSON.stringify({ id: row.id }) })
+      setMsg(data.ok ? { ok: true, text: `${row.name} 已${data.action === 'enabled' ? '启用' : '禁用'}（即时生效）` } : { ok: false, text: data.error ?? 'failed' })
+    } catch (error) {
+      setMsg({ ok: false, text: error instanceof Error ? error.message : String(error) })
+    }
     await refresh()
     setBusy(false)
   }
@@ -202,28 +203,36 @@ function PluginsTab({ busy, setBusy, msg, setMsg }: {
     if (target === '') return
     setBusy(true)
     setMsg(null)
-    const data = await managerFetch<{ ok: boolean; output: string }>('/manager/api/install', {
-      method: 'POST', body: JSON.stringify({ spec: target }) })
-    setMsg(data.ok
-      ? { ok: true, text: `安装成功：${target}\n${data.output.slice(-800)}\n重启 web/桌面端后生效。` }
-      : { ok: false, text: `安装失败：${target}\n${data.output.slice(-800)}` })
-    setSpec('')
+    try {
+      const data = await managerFetch<{ ok: boolean; output: string }>('/manager/api/install', {
+        method: 'POST', body: JSON.stringify({ spec: target }) })
+      setMsg(data.ok
+        ? { ok: true, text: `安装成功：${target}\n${data.output.slice(-800)}\n重启 web/桌面端后生效。` }
+        : { ok: false, text: `安装失败：${target}\n${data.output.slice(-800)}` })
+      setSpec('')
+    } catch (error) {
+      setMsg({ ok: false, text: error instanceof Error ? error.message : String(error) })
+    }
     setBusy(false)
   }
 
   const uninstall = async (row: PluginRow): Promise<void> => {
     setBusy(true)
     setMsg(null)
-    const data = await managerFetch<{ ok: boolean; output: string }>('/manager/api/uninstall', {
-      method: 'POST', body: JSON.stringify({ name: row.name }) })
-    setMsg(data.ok
-      ? { ok: true, text: `已卸载：${row.name}\n${data.output.slice(-600)}\n重启后生效。` }
-      : { ok: false, text: `卸载失败：${row.name}\n${data.output.slice(-600)}` })
+    try {
+      const data = await managerFetch<{ ok: boolean; output: string }>('/manager/api/uninstall', {
+        method: 'POST', body: JSON.stringify({ name: row.name }) })
+      setMsg(data.ok
+        ? { ok: true, text: `已卸载：${row.name}\n${data.output.slice(-600)}\n重启后生效。` }
+        : { ok: false, text: `卸载失败：${row.name}\n${data.output.slice(-600)}` })
+    } catch (error) {
+      setMsg({ ok: false, text: error instanceof Error ? error.message : String(error) })
+    }
     setBusy(false)
   }
 
   return (
-    <>
+    <div className="dshm-body">
       <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
         <input className="dshm-input" placeholder="安装插件：npm 包名 或 github:owner/repo" value={spec}
           onChange={(e) => setSpec(e.target.value)}
@@ -239,67 +248,65 @@ function PluginsTab({ busy, setBusy, msg, setMsg }: {
           <button type="button" className="dshm-btn danger" disabled={busy} onClick={() => void uninstall(row)}>卸载</button>
         </div>
       ))}
-      <div className="dshm-hint">profile: {profile} · 启停即时生效；安装/卸载需要重启 web 或桌面端后生效。</div>
-    </>
+      <div className="dshm-hint">profile: {profile} · 启停即时生效；安装/卸载需要完全重启 web 或桌面端后生效。</div>
+      <Msg msg={msg} />
+    </div>
   )
 }
 
-/** ==================== M1: market tab ==================== */
-function MarketTab({ busy, setBusy, msg, setMsg }: {
-  busy: boolean
-  setBusy: (v: boolean) => void
-  msg: { ok: boolean; text: string } | null
-  setMsg: (v: { ok: boolean; text: string } | null) => void
-}): ReactNode {
+/** ==================== 设置 → 插件 →「插件市场」tab ==================== */
+function MarketStoreTab(props: Record<string, unknown>): ReactNode {
+  const { busy, setBusy, msg, setMsg } = useManagerState()
   const [market, setMarket] = useState<MarketRow[]>([])
 
   const load = async (): Promise<void> => {
-    await loadInto(
-      (data) => setMarket(data.plugins),
-      (msg) => setMsg({ ok: false, text: msg }),
-      async () => {
-        const data = await managerFetch<{ ok: boolean; plugins: MarketRow[] }>('/manager/api/market')
-        if (!data.ok) throw new Error(data.ok === undefined ? 'host 端未加载 dsh-manager（请重启 web/桌面端）' : 'market API 错误')
-        return data
-      },
-    )
+    try {
+      const data = await managerFetch<{ ok: boolean; plugins: MarketRow[] }>('/manager/api/market')
+      if (data.ok !== true) throw new Error(data.ok === undefined ? 'host 端未加载 dsh-manager（请完全重启 web GUI）' : 'market API 错误')
+      setMarket(data.plugins)
+    } catch (error) {
+      setMsg({ ok: false, text: error instanceof Error ? error.message : String(error) })
+    }
   }
   useEffect(() => { void load() }, [])
 
   const install = async (repo: string): Promise<void> => {
     setBusy(true)
     setMsg(null)
-    const data = await managerFetch<{ ok: boolean; output: string }>('/manager/api/install', {
-      method: 'POST', body: JSON.stringify({ spec: `github:${repo}` }) })
-    setMsg(data.ok
-      ? { ok: true, text: `安装成功：${repo}\n${data.output.slice(-800)}\n重启 web/桌面端后生效。` }
-      : { ok: false, text: `安装失败：${repo}\n${data.output.slice(-800)}` })
+    try {
+      const data = await managerFetch<{ ok: boolean; output: string }>('/manager/api/install', {
+        method: 'POST', body: JSON.stringify({ spec: `github:${repo}` }) })
+      setMsg(data.ok
+        ? { ok: true, text: `安装成功：${repo}\n${data.output.slice(-800)}\n重启 web/桌面端后生效。` }
+        : { ok: false, text: `安装失败：${repo}\n${data.output.slice(-800)}` })
+    } catch (error) {
+      setMsg({ ok: false, text: error instanceof Error ? error.message : String(error) })
+    }
     setBusy(false)
   }
 
   return (
-    <div className="dshm-grid">
-      {market.map((row) => (
-        <div key={row.repo + row.name} className="dshm-card">
-          <div className="dshm-card-name">{row.name} <span style={{ color: '#6b7384', fontWeight: 400 }}>★{row.stars}</span></div>
-          <div className="dshm-card-desc">{row.desc}</div>
-          <div className="dshm-card-foot">
-            <a href={`https://github.com/${row.repo}`} target="_blank" rel="noreferrer" style={{ color: '#5fb3ff', textDecoration: 'none' }}>{row.repo}</a>
-            <button type="button" className="dshm-btn primary" style={{ marginLeft: 'auto' }} disabled={busy} onClick={() => void install(row.repo)}>安装</button>
+    <div className="dshm-body">
+      <div className="dshm-grid">
+        {market.map((row) => (
+          <div key={row.repo + row.name} className="dshm-card">
+            <div className="dshm-card-name">{row.name} <span style={{ color: '#6b7384', fontWeight: 400 }}>★{row.stars}</span></div>
+            <div className="dshm-card-desc">{row.desc}</div>
+            <div className="dshm-card-foot">
+              <a href={`https://github.com/${row.repo}`} target="_blank" rel="noreferrer" style={{ color: '#5fb3ff', textDecoration: 'none' }}>{row.repo}</a>
+              <button type="button" className="dshm-btn primary" style={{ marginLeft: 'auto' }} disabled={busy} onClick={() => void install(row.repo)}>安装</button>
+            </div>
           </div>
-        </div>
-      ))}
+        ))}
+      </div>
+      <Msg msg={msg} />
     </div>
   )
 }
 
-/** ==================== M2: skills tab ==================== */
-function SkillsTab({ busy, setBusy, msg, setMsg }: {
-  busy: boolean
-  setBusy: (v: boolean) => void
-  msg: { ok: boolean; text: string } | null
-  setMsg: (v: { ok: boolean; text: string } | null) => void
-}): ReactNode {
+/** ==================== 设置 → Skills 管理 ==================== */
+function SkillsPage(props: Record<string, unknown>): ReactNode {
+  const { busy, setBusy, msg, setMsg } = useManagerState()
   const [skills, setSkills] = useState<SkillRow[]>([])
   const [loading, setLoading] = useState(true)
   const [detail, setDetail] = useState<{ name: string; content: string } | null>(null)
@@ -309,15 +316,13 @@ function SkillsTab({ busy, setBusy, msg, setMsg }: {
   const fileRef = { current: null as HTMLInputElement | null }
 
   const refresh = async (): Promise<void> => {
-    await loadInto(
-      (data) => setSkills(data.skills),
-      (msg) => setMsg({ ok: false, text: msg }),
-      async () => {
-        const data = await managerFetch<{ ok: boolean; skills: SkillRow[] }>('/manager/api/skills')
-        if (!data.ok) throw new Error(data.ok === undefined ? 'host 端未加载 dsh-manager（请重启 web/桌面端）' : 'skills API 错误')
-        return data
-      },
-    )
+    try {
+      const data = await managerFetch<{ ok: boolean; skills: SkillRow[] }>('/manager/api/skills')
+      if (data.ok !== true) throw new Error(data.ok === undefined ? 'host 端未加载 dsh-manager（请完全重启 web GUI）' : 'skills API 错误')
+      setSkills(data.skills)
+    } catch (error) {
+      setMsg({ ok: false, text: error instanceof Error ? error.message : String(error) })
+    }
   }
   useEffect(() => { void refresh().then(() => setLoading(false)) }, [])
 
@@ -333,9 +338,13 @@ function SkillsTab({ busy, setBusy, msg, setMsg }: {
   const install = async (): Promise<void> => {
     setBusy(true)
     setMsg(null)
-    const data = await managerFetch<{ ok: boolean; error?: string }>('/manager/api/skills/install', {
-      method: 'POST', body: JSON.stringify({ name: newName.trim(), content: newContent }) })
-    setMsg(data.ok ? { ok: true, text: `技能 ${newName.trim()} 已安装到用户 skills 目录。` } : { ok: false, text: data.error ?? 'failed' })
+    try {
+      const data = await managerFetch<{ ok: boolean; error?: string }>('/manager/api/skills/install', {
+        method: 'POST', body: JSON.stringify({ name: newName.trim(), content: newContent }) })
+      setMsg(data.ok ? { ok: true, text: `技能 ${newName.trim()} 已安装到用户 skills 目录。` } : { ok: false, text: data.error ?? 'failed' })
+    } catch (error) {
+      setMsg({ ok: false, text: error instanceof Error ? error.message : String(error) })
+    }
     setInstallOpen(false)
     setNewName('')
     setNewContent('')
@@ -347,11 +356,15 @@ function SkillsTab({ busy, setBusy, msg, setMsg }: {
     const content = await file.text()
     setBusy(true)
     setMsg(null)
-    const data = await managerFetch<{ ok: boolean; name?: string; error?: string }>('/manager/api/skills/import', {
-      method: 'POST', body: JSON.stringify({ filename: file.name, content }) })
-    setMsg(data.ok
-      ? { ok: true, text: `已导入技能 ${data.name ?? file.name}（名称取自 frontmatter，否则取自文件名）。` }
-      : { ok: false, text: data.error ?? '导入失败' })
+    try {
+      const data = await managerFetch<{ ok: boolean; name?: string; error?: string }>('/manager/api/skills/import', {
+        method: 'POST', body: JSON.stringify({ filename: file.name, content }) })
+      setMsg(data.ok
+        ? { ok: true, text: `已导入技能 ${data.name ?? file.name}（名称取自 frontmatter，否则取自文件名）。` }
+        : { ok: false, text: data.error ?? '导入失败' })
+    } catch (error) {
+      setMsg({ ok: false, text: error instanceof Error ? error.message : String(error) })
+    }
     await refresh()
     setBusy(false)
   }
@@ -365,76 +378,70 @@ function SkillsTab({ busy, setBusy, msg, setMsg }: {
   const uninstall = async (skill: SkillRow): Promise<void> => {
     setBusy(true)
     setMsg(null)
-    const data = await managerFetch<{ ok: boolean; error?: string }>('/manager/api/skills/uninstall', {
-      method: 'POST', body: JSON.stringify({ name: skill.name }) })
-    setMsg(data.ok ? { ok: true, text: `技能 ${skill.name} 已移除（仅限用户目录中的技能）。` } : { ok: false, text: data.error ?? 'failed' })
+    try {
+      const data = await managerFetch<{ ok: boolean; error?: string }>('/manager/api/skills/uninstall', {
+        method: 'POST', body: JSON.stringify({ name: skill.name }) })
+      setMsg(data.ok ? { ok: true, text: `技能 ${skill.name} 已移除（仅限用户目录中的技能）。` } : { ok: false, text: data.error ?? 'failed' })
+    } catch (error) {
+      setMsg({ ok: false, text: error instanceof Error ? error.message : String(error) })
+    }
     await refresh()
     setBusy(false)
   }
 
   return (
-    <>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-        <button type="button" className="dshm-btn primary" onClick={() => setInstallOpen((v) => !v)}>+ 新建用户技能</button>
-        <button type="button" className="dshm-btn" onClick={() => fileRef.current?.click()}>📄 导入 md 文件</button>
-        <input ref={(el) => { fileRef.current = el }} type="file" accept=".md,.markdown" style={{ display: 'none' }} onChange={onFilePicked} />
+    <div className="dshm-page">
+      <div className="dshm-head"><h2>Skills 管理</h2></div>
+      <div className="dshm-body">
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+          <button type="button" className="dshm-btn primary" onClick={() => setInstallOpen((v) => !v)}>+ 新建用户技能</button>
+          <button type="button" className="dshm-btn" onClick={() => fileRef.current?.click()}>📄 导入 md 文件</button>
+          <input ref={(el) => { fileRef.current = el }} type="file" accept=".md,.markdown" style={{ display: 'none' }} onChange={onFilePicked} />
+        </div>
+        {installOpen && (
+          <div className="dshm-form">
+            <div className="dshm-form-row">
+              <input className="dshm-input" placeholder="技能名称（小写字母/数字/中划线，如 my-helper）" value={newName}
+                onChange={(e) => setNewName(e.target.value)} />
+            </div>
+            <textarea className="dshm-textarea" rows={6} placeholder={'SKILL.md 内容，以 YAML frontmatter 开头：\n---\nname: my-helper\ndescription: 一句话描述\n---\n\n# 使用说明\n...'} value={newContent}
+              onChange={(e) => setNewContent(e.target.value)} />
+            <div className="dshm-form-row">
+              <button type="button" className="dshm-btn primary" disabled={busy || newName.trim() === '' || newContent === ''} onClick={() => void install()}>安装</button>
+              <button type="button" className="dshm-btn" onClick={() => setInstallOpen(false)}>取消</button>
+            </div>
+          </div>
+        )}
+        {detail !== null && (
+          <div className="dshm-detail">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <strong style={{ fontSize: 13 }}>{detail.name}</strong>
+              <button type="button" className="dshm-btn" style={{ marginLeft: 'auto' }} onClick={() => setDetail(null)}>关闭</button>
+            </div>
+            <pre>{detail.content}</pre>
+          </div>
+        )}
+        {loading ? <div style={{ color: '#6b7384' }}>加载中…</div> : skills.map((skill) => (
+          <div key={skill.name + (skill.source ?? '')} className="dshm-row">
+            <span className="dshm-name" title={skill.description}>{skill.name}</span>
+            <span className="dshm-id" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{skill.description}</span>
+            {skill.source !== undefined && <span className="dshm-badge">{skill.source}</span>}
+            <button type="button" className="dshm-btn" onClick={() => void showDetail(skill)}>详情</button>
+            {(skill.source === 'user-agents' || skill.source === 'user-dsh') && (
+              <button type="button" className="dshm-btn danger" disabled={busy} onClick={() => void uninstall(skill)}>卸载</button>
+            )}
+          </div>
+        ))}
+        <div className="dshm-hint">用户技能存于 ~/.dsh/skills（新建/导入/卸载均在此）· 展示范围：~/.dsh/skills、~/.agents/skills、项目级与内置 bundled。</div>
+        <Msg msg={msg} />
       </div>
-      {installOpen && (
-        <div className="dshm-form">
-          <div className="dshm-form-row">
-            <input className="dshm-input" placeholder="技能名称（小写字母/数字/中划线，如 my-helper）" value={newName}
-              onChange={(e) => setNewName(e.target.value)} />
-          </div>
-          <textarea className="dshm-textarea" rows={6} placeholder={'SKILL.md 内容，以 YAML frontmatter 开头：\n---\nname: my-helper\ndescription: 一句话描述\n---\n\n# 使用说明\n...'} value={newContent}
-            onChange={(e) => setNewContent(e.target.value)} />
-          <div className="dshm-form-row">
-            <button type="button" className="dshm-btn primary" disabled={busy || newName.trim() === '' || newContent === ''} onClick={() => void install()}>安装</button>
-            <button type="button" className="dshm-btn" onClick={() => setInstallOpen(false)}>取消</button>
-          </div>
-        </div>
-      )}
-      {detail !== null && (
-        <div className="dshm-detail">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <strong style={{ fontSize: 13 }}>{detail.name}</strong>
-            <button type="button" className="dshm-btn" style={{ marginLeft: 'auto' }} onClick={() => setDetail(null)}>关闭</button>
-          </div>
-          <pre>{detail.content}</pre>
-        </div>
-      )}
-      {loading ? <div style={{ color: '#6b7384' }}>加载中…</div> : skills.map((skill) => (
-        <div key={skill.name + (skill.source ?? '')} className="dshm-row">
-          <span className="dshm-name" title={skill.description}>{skill.name}</span>
-          <span className="dshm-id" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{skill.description}</span>
-          {skill.source !== undefined && <span className="dshm-badge">{skill.source}</span>}
-          <button type="button" className="dshm-btn" onClick={() => void showDetail(skill)}>详情</button>
-          {(skill.source === 'user-agents' || skill.source === 'user-dsh') && (
-            <button type="button" className="dshm-btn danger" disabled={busy} onClick={() => void uninstall(skill)}>卸载</button>
-          )}
-        </div>
-      ))}
-      <div className="dshm-hint">用户技能存于 ~/.dsh/skills（新建/导入/卸载均在此）· 展示范围：~/.dsh/skills、~/.agents/skills、项目级与内置 bundled。</div>
-    </>
+    </div>
   )
 }
 
-/** One Smithery store server row. */
-interface MarketServer {
-  id: string
-  name: string
-  description: string
-  verified: boolean
-  useCount: number
-  url: string | null
-}
-
-/** ==================== M2: MCP tab ==================== */
-function McpTab({ busy, setBusy, msg, setMsg }: {
-  busy: boolean
-  setBusy: (v: boolean) => void
-  msg: { ok: boolean; text: string } | null
-  setMsg: (v: { ok: boolean; text: string } | null) => void
-}): ReactNode {
+/** ==================== 设置 → MCP 管理 ==================== */
+function McpPage(props: Record<string, unknown>): ReactNode {
+  const { busy, setBusy, msg, setMsg } = useManagerState()
   const [view, setView] = useState<'configured' | 'market'>('configured')
   const [servers, setServers] = useState<McpServer[]>([])
   const [loading, setLoading] = useState(true)
@@ -445,15 +452,13 @@ function McpTab({ busy, setBusy, msg, setMsg }: {
   const [marketQuery, setMarketQuery] = useState('')
 
   const refresh = async (): Promise<void> => {
-    await loadInto(
-      (data) => setServers(data.servers),
-      (msg) => setMsg({ ok: false, text: msg }),
-      async () => {
-        const data = await managerFetch<{ ok: boolean; servers: McpServer[] }>('/manager/api/mcp')
-        if (!data.ok) throw new Error(data.ok === undefined ? 'host 端未加载 dsh-manager（请重启 web/桌面端）' : 'mcp API 错误')
-        return data
-      },
-    )
+    try {
+      const data = await managerFetch<{ ok: boolean; servers: McpServer[] }>('/manager/api/mcp')
+      if (data.ok !== true) throw new Error(data.ok === undefined ? 'host 端未加载 dsh-manager（请完全重启 web GUI）' : 'mcp API 错误')
+      setServers(data.servers)
+    } catch (error) {
+      setMsg({ ok: false, text: error instanceof Error ? error.message : String(error) })
+    }
   }
   useEffect(() => { void refresh().then(() => setLoading(false)) }, [])
 
@@ -484,9 +489,13 @@ function McpTab({ busy, setBusy, msg, setMsg }: {
     }
     setBusy(true)
     setMsg(null)
-    const data = await managerFetch<{ ok: boolean; error?: string; note?: string }>('/manager/api/mcp/install-market', {
-      method: 'POST', body: JSON.stringify({ name: row.id, url: row.url }) })
-    setMsg(data.ok ? { ok: true, text: data.note ?? '已安装。' } : { ok: false, text: data.error ?? '安装失败' })
+    try {
+      const data = await managerFetch<{ ok: boolean; error?: string; note?: string }>('/manager/api/mcp/install-market', {
+        method: 'POST', body: JSON.stringify({ name: row.id, url: row.url }) })
+      setMsg(data.ok ? { ok: true, text: data.note ?? '已安装。' } : { ok: false, text: data.error ?? '安装失败' })
+    } catch (error) {
+      setMsg({ ok: false, text: error instanceof Error ? error.message : String(error) })
+    }
     await refresh()
     setBusy(false)
   }
@@ -504,8 +513,6 @@ function McpTab({ busy, setBusy, msg, setMsg }: {
     } else {
       if (server.url !== undefined) config.url = server.url
     }
-    // env/headers: '' keeps the previous value, null removes the key,
-    // a non-empty value overwrites it (host side merges with the old config).
     const env: Record<string, unknown> = {}
     for (const row of server.env) {
       if (row.key === '') continue
@@ -521,9 +528,13 @@ function McpTab({ busy, setBusy, msg, setMsg }: {
     for (const key of server.removedHeaders) headers[key] = null
     if (Object.keys(headers).length > 0) config.headers = headers
     const next = [...servers.filter((s) => s.id !== server.id), { ...server, config }]
-    const data = await managerFetch<{ ok: boolean; error?: string; note?: string }>('/manager/api/mcp/save', {
-      method: 'POST', body: JSON.stringify({ servers: next }) })
-    setMsg(data.ok ? { ok: true, text: data.note ?? '已保存。' } : { ok: false, text: data.error ?? 'failed' })
+    try {
+      const data = await managerFetch<{ ok: boolean; error?: string; note?: string }>('/manager/api/mcp/save', {
+        method: 'POST', body: JSON.stringify({ servers: next }) })
+      setMsg(data.ok ? { ok: true, text: data.note ?? '已保存。' } : { ok: false, text: data.error ?? 'failed' })
+    } catch (error) {
+      setMsg({ ok: false, text: error instanceof Error ? error.message : String(error) })
+    }
     setEditing(null)
     await refresh()
     setBusy(false)
@@ -533,9 +544,13 @@ function McpTab({ busy, setBusy, msg, setMsg }: {
     setBusy(true)
     setMsg(null)
     const next = servers.filter((s) => s.id !== server.id)
-    const data = await managerFetch<{ ok: boolean; error?: string }>('/manager/api/mcp/save', {
-      method: 'POST', body: JSON.stringify({ servers: next }) })
-    setMsg(data.ok ? { ok: true, text: `已删除 MCP 服务器 ${server.serverName}。重启后生效。` } : { ok: false, text: data.error ?? 'failed' })
+    try {
+      const data = await managerFetch<{ ok: boolean; error?: string }>('/manager/api/mcp/save', {
+        method: 'POST', body: JSON.stringify({ servers: next }) })
+      setMsg(data.ok ? { ok: true, text: `已删除 MCP 服务器 ${server.serverName}。重启后生效。` } : { ok: false, text: data.error ?? 'failed' })
+    } catch (error) {
+      setMsg({ ok: false, text: error instanceof Error ? error.message : String(error) })
+    }
     await refresh()
     setBusy(false)
   }
@@ -567,274 +582,175 @@ function McpTab({ busy, setBusy, msg, setMsg }: {
   }
 
   return (
-    <>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-        <button type="button" className={`dshm-btn${view === 'configured' ? ' primary' : ''}`} onClick={() => setView('configured')}>已配置</button>
-        <button type="button" className={`dshm-btn${view === 'market' ? ' primary' : ''}`} onClick={() => setView('market')}>开源商店</button>
-        {view === 'configured' && (
-          <>
-            <button type="button" className="dshm-btn" onClick={() => setEditing(newServer())}>+ 新增</button>
-            <span className="dshm-hint" style={{ margin: 'auto 0 auto auto' }}>写入 profile 的 cordis.patch.yml 托管块，重启后生效。</span>
-          </>
-        )}
-      </div>
-      {editing !== null && (
-        <div className="dshm-form">
-          <div className="dshm-form-row">
-            <input className="dshm-input" placeholder="配置行 id（如 mcp-chrome）" value={editing.id}
-              onChange={(e) => setEditing({ ...editing, id: e.target.value })} />
-            <input className="dshm-input" placeholder="serverName（工具名前缀，如 chrome-devtools）" value={editing.serverName}
-              onChange={(e) => setEditing({ ...editing, serverName: e.target.value })} />
-          </div>
-          <div className="dshm-form-row">
-            <select className="dshm-select" value={editing.transport}
-              onChange={(e) => setEditing({ ...editing, transport: e.target.value })}>
-              <option value="stdio">stdio（子进程）</option>
-              <option value="streamable-http">streamable-http（URL）</option>
-            </select>
-            {editing.transport === 'stdio' ? (
-              <>
-                <input className="dshm-input" placeholder="command（如 npx）" value={editing.command ?? ''}
-                  onChange={(e) => setEditing({ ...editing, command: e.target.value })} />
-                <input className="dshm-input" placeholder="args（逗号分隔，如 -y,chrome-devtools-mcp）" value={(editing.args ?? []).join(',')}
-                  onChange={(e) => setEditing({ ...editing, args: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })} />
-              </>
-            ) : (
-              <input className="dshm-input" placeholder="url（如 http://localhost:3000/mcp）" value={editing.url ?? ''}
-                onChange={(e) => setEditing({ ...editing, url: e.target.value })} />
-            )}
-          </div>
-          <div className="dshm-sec-title">env（已设置的行留空 = 保留原值；输入新值 = 覆盖；× = 删除）</div>
-          {editing.env.map((row, i) => (
-            <div key={i} className="dshm-kv">
-              <input className="dshm-input" placeholder="环境变量名" value={row.key}
-                onChange={(e) => updateEnvRow(editing, i, { key: e.target.value })} />
-              <input className="dshm-input" type={row.set ? 'password' : 'text'}
-                placeholder={row.set ? '已设置（留空保留）' : '值'}
-                value={row.value === null ? '' : row.value}
-                onChange={(e) => updateEnvRow(editing, i, { value: e.target.value })} />
-              <button type="button" className="dshm-btn danger" onClick={() => removeEnvRow(editing, i)}>×</button>
-            </div>
-          ))}
-          <div className="dshm-sec-title">headers</div>
-          {editing.headers.map((row, i) => (
-            <div key={i} className="dshm-kv">
-              <input className="dshm-input" placeholder="Header 名" value={row.key}
-                onChange={(e) => setEditing({ ...editing, headers: editing.headers.map((h, j) => (j === i ? { ...h, key: e.target.value } : h)) })} />
-              <input className="dshm-input" type={row.set ? 'password' : 'text'}
-                placeholder={row.set ? '已设置（留空保留）' : '值'}
-                value={row.value === null ? '' : row.value}
-                onChange={(e) => setEditing({ ...editing, headers: editing.headers.map((h, j) => (j === i ? { ...h, value: e.target.value } : h)) })} />
-              <button type="button" className="dshm-btn danger"
-                onClick={() => {
-                  const h = editing.headers[i]
-                  const headers = editing.headers.filter((_, j) => j !== i)
-                  const removedHeaders = h !== undefined && h.set && h.key !== '' ? [...editing.removedHeaders, h.key] : editing.removedHeaders
-                  setEditing({ ...editing, headers, removedHeaders })
-                }}>×</button>
-            </div>
-          ))}
-          <div className="dshm-form-row">
-            <button type="button" className="dshm-btn" onClick={() => setEditing({ ...editing, env: [...editing.env, { key: '', value: '', set: false }] })}>+ env 行</button>
-            <button type="button" className="dshm-btn" onClick={() => setEditing({ ...editing, headers: [...editing.headers, { key: '', value: '', set: false }] })}>+ header 行</button>
-          </div>
-          <div className="dshm-form-row">
-            <button type="button" className="dshm-btn primary" disabled={busy || editing.id === '' || editing.serverName === ''}
-              onClick={() => void save(editing)}>保存</button>
-            <button type="button" className="dshm-btn" onClick={() => setEditing(null)}>取消</button>
-          </div>
-        </div>
-      )}
-      {view === 'market' ? (
-        <>
-          <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-            <input className="dshm-input" placeholder="搜索 MCP 开源商店（Smithery），如 github / browser / sqlite" value={marketQuery}
-              onChange={(e) => setMarketQuery(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') void searchMarket(marketQuery.trim()) }} />
-            <button type="button" className="dshm-btn primary" disabled={marketLoading} onClick={() => void searchMarket(marketQuery.trim())}>搜索</button>
-          </div>
-          <div className="dshm-hint" style={{ marginBottom: 10 }}>数据源：Smithery 开源 MCP 商店（registry.smithery.ai）· 支持远程部署的一键安装</div>
-          {marketLoading ? <div style={{ color: '#6b7384' }}>搜索中…</div>
-            : market.length === 0 ? <div style={{ color: '#6b7384' }}>没有结果，换个关键词试试。</div>
-            : <div className="dshm-grid">
-              {market.map((row) => (
-                <div key={row.id} className="dshm-card">
-                  <div className="dshm-card-name">
-                    {row.name}
-                    {row.verified && <span className="dshm-badge ok" style={{ marginLeft: 6 }}>verified</span>}
-                    <span style={{ color: '#6b7384', fontWeight: 400, marginLeft: 6 }}>▴{row.useCount}</span>
-                  </div>
-                  <div className="dshm-card-desc">{row.description}</div>
-                  <div className="dshm-card-foot">
-                    <span className="dshm-mono" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{row.id}</span>
-                    <button type="button" className="dshm-btn primary" disabled={busy || row.url === null}
-                      title={row.url === null ? '该服务器无远程部署，无法一键安装' : row.url ?? ''}
-                      onClick={() => void installFromMarket(row)}>安装</button>
-                  </div>
-                </div>
-              ))}
-            </div>}
-        </>
-      ) : (
-        <>
-      {loading ? <div style={{ color: '#6b7384' }}>加载中…</div> : servers.map((server) => (
-        <div key={server.id} className="dshm-row">
-          <span className={`dshm-badge ${server.running ? 'on' : 'off'}`}>{server.running ? '运行中' : '未加载'}</span>
-          <span className="dshm-name">{server.serverName}</span>
-          <span className="dshm-id">{server.transport === 'stdio' ? `${server.command ?? ''} ${(server.args ?? []).join(' ')}` : server.url ?? ''}</span>
-          {(server.env.length > 0 || server.headers.length > 0) && (
-            <span className="dshm-badge">env:{server.env.length} hdr:{server.headers.length}</span>
+    <div className="dshm-page">
+      <div className="dshm-head"><h2>MCP 管理</h2></div>
+      <div className="dshm-body">
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+          <button type="button" className={`dshm-btn${view === 'configured' ? ' primary' : ''}`} onClick={() => setView('configured')}>已配置</button>
+          <button type="button" className={`dshm-btn${view === 'market' ? ' primary' : ''}`} onClick={() => setView('market')}>开源商店</button>
+          {view === 'configured' && (
+            <>
+              <button type="button" className="dshm-btn" onClick={() => setEditing(newServer())}>+ 新增</button>
+              <span className="dshm-hint" style={{ margin: 'auto 0 auto auto' }}>写入 profile 的 cordis.patch.yml 托管块，重启后生效。</span>
+            </>
           )}
-          <button type="button" className="dshm-btn" onClick={() => editServer(server)}>编辑</button>
-          <button type="button" className="dshm-btn danger" disabled={busy} onClick={() => void remove(server)}>删除</button>
         </div>
-      ))}
-        </>
-      )}
-    </>
-  )
-}
-
-/** ==================== M3: theme tab ==================== */
-function ThemeTab({ busy, setBusy, msg, setMsg }: {
-  busy: boolean
-  setBusy: (v: boolean) => void
-  msg: { ok: boolean; text: string } | null
-  setMsg: (v: { ok: boolean; text: string } | null) => void
-}): ReactNode {
-  const [preference, setPreference] = useState('system')
-  const [skins, setSkins] = useState<PluginRow[]>([])
-  const [loading, setLoading] = useState(true)
-
-  const refresh = async (): Promise<void> => {
-    await loadInto(
-      (data) => { setPreference(data.preference); setSkins(data.skins) },
-      (msg) => setMsg({ ok: false, text: msg }),
-      async () => {
-        const data = await managerFetch<{ ok: boolean; preference: string; skins: PluginRow[] }>('/manager/api/theme')
-        if (!data.ok) throw new Error(data.ok === undefined ? 'host 端未加载 dsh-manager（请重启 web/桌面端）' : 'theme API 错误')
-        return data
-      },
-    )
-  }
-  useEffect(() => { void refresh().then(() => setLoading(false)) }, [])
-
-  const savePreference = async (value: string): Promise<void> => {
-    setBusy(true)
-    setMsg(null)
-    const data = await managerFetch<{ ok: boolean; error?: string }>('/manager/api/theme', {
-      method: 'POST', body: JSON.stringify({ preference: value }) })
-    setMsg(data.ok ? { ok: true, text: `主题已切换为 ${value}（即时生效）。` } : { ok: false, text: data.error ?? 'failed' })
-    setPreference(value)
-    setBusy(false)
-  }
-
-  const toggleSkin = async (row: PluginRow): Promise<void> => {
-    setBusy(true)
-    setMsg(null)
-    const data = await managerFetch<{ ok: boolean; action: string; error?: string }>(
-      '/manager/api/plugins/toggle', { method: 'POST', body: JSON.stringify({ id: row.id }) })
-    setMsg(data.ok ? { ok: true, text: `${row.name} 已${data.action === 'enabled' ? '启用' : '禁用'}（即时生效）` } : { ok: false, text: data.error ?? 'failed' })
-    await refresh()
-    setBusy(false)
-  }
-
-  return (
-    <>
-      <div className="dshm-sec">
-        <div className="dshm-sec-title">主题偏好（ui-theme）</div>
-        {loading ? <div style={{ color: '#6b7384' }}>加载中…</div> : (
+        {editing !== null && (
           <div className="dshm-form">
             <div className="dshm-form-row">
-              {(['light', 'dark', 'system'] as const).map((value) => (
-                <button key={value} type="button"
-                  className={`dshm-btn ${preference === value ? 'primary' : ''}`}
-                  disabled={busy} onClick={() => void savePreference(value)}>
-                  {value === 'light' ? '浅色' : value === 'dark' ? '深色' : '跟随系统'}
-                </button>
-              ))}
+              <input className="dshm-input" placeholder="配置行 id（如 mcp-chrome）" value={editing.id}
+                onChange={(e) => setEditing({ ...editing, id: e.target.value })} />
+              <input className="dshm-input" placeholder="serverName（工具名前缀，如 chrome-devtools）" value={editing.serverName}
+                onChange={(e) => setEditing({ ...editing, serverName: e.target.value })} />
+            </div>
+            <div className="dshm-form-row">
+              <select className="dshm-select" value={editing.transport}
+                onChange={(e) => setEditing({ ...editing, transport: e.target.value })}>
+                <option value="stdio">stdio（子进程）</option>
+                <option value="streamable-http">streamable-http（URL）</option>
+              </select>
+              {editing.transport === 'stdio' ? (
+                <>
+                  <input className="dshm-input" placeholder="command（如 npx）" value={editing.command ?? ''}
+                    onChange={(e) => setEditing({ ...editing, command: e.target.value })} />
+                  <input className="dshm-input" placeholder="args（逗号分隔，如 -y,chrome-devtools-mcp）" value={(editing.args ?? []).join(',')}
+                    onChange={(e) => setEditing({ ...editing, args: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })} />
+                </>
+              ) : (
+                <input className="dshm-input" placeholder="url（如 http://localhost:3000/mcp）" value={editing.url ?? ''}
+                  onChange={(e) => setEditing({ ...editing, url: e.target.value })} />
+              )}
+            </div>
+            <div className="dshm-sec-title">env（已设置的行留空 = 保留原值；输入新值 = 覆盖；× = 删除）</div>
+            {editing.env.map((row, i) => (
+              <div key={i} className="dshm-kv">
+                <input className="dshm-input" placeholder="环境变量名" value={row.key}
+                  onChange={(e) => updateEnvRow(editing, i, { key: e.target.value })} />
+                <input className="dshm-input" type={row.set ? 'password' : 'text'}
+                  placeholder={row.set ? '已设置（留空保留）' : '值'}
+                  value={row.value === null ? '' : row.value}
+                  onChange={(e) => updateEnvRow(editing, i, { value: e.target.value })} />
+                <button type="button" className="dshm-btn danger" onClick={() => removeEnvRow(editing, i)}>×</button>
+              </div>
+            ))}
+            <div className="dshm-sec-title">headers</div>
+            {editing.headers.map((row, i) => (
+              <div key={i} className="dshm-kv">
+                <input className="dshm-input" placeholder="Header 名" value={row.key}
+                  onChange={(e) => setEditing({ ...editing, headers: editing.headers.map((h, j) => (j === i ? { ...h, key: e.target.value } : h)) })} />
+                <input className="dshm-input" type={row.set ? 'password' : 'text'}
+                  placeholder={row.set ? '已设置（留空保留）' : '值'}
+                  value={row.value === null ? '' : row.value}
+                  onChange={(e) => setEditing({ ...editing, headers: editing.headers.map((h, j) => (j === i ? { ...h, value: e.target.value } : h)) })} />
+                <button type="button" className="dshm-btn danger"
+                  onClick={() => {
+                    const h = editing.headers[i]
+                    const headers = editing.headers.filter((_, j) => j !== i)
+                    const removedHeaders = h !== undefined && h.set && h.key !== '' ? [...editing.removedHeaders, h.key] : editing.removedHeaders
+                    setEditing({ ...editing, headers, removedHeaders })
+                  }}>×</button>
+              </div>
+            ))}
+            <div className="dshm-form-row">
+              <button type="button" className="dshm-btn" onClick={() => setEditing({ ...editing, env: [...editing.env, { key: '', value: '', set: false }] })}>+ env 行</button>
+              <button type="button" className="dshm-btn" onClick={() => setEditing({ ...editing, headers: [...editing.headers, { key: '', value: '', set: false }] })}>+ header 行</button>
+            </div>
+            <div className="dshm-form-row">
+              <button type="button" className="dshm-btn primary" disabled={busy || editing.id === '' || editing.serverName === ''}
+                onClick={() => void save(editing)}>保存</button>
+              <button type="button" className="dshm-btn" onClick={() => setEditing(null)}>取消</button>
             </div>
           </div>
         )}
-      </div>
-      <div className="dshm-sec">
-        <div className="dshm-sec-title">已安装皮肤插件（启停即时生效）</div>
-        {skins.map((row) => (
-          <div key={row.id} className="dshm-row">
-            <span className={`dshm-badge ${row.disabled ? 'off' : 'on'}`}>{row.disabled ? '已禁用' : '已启用'}</span>
-            <span className="dshm-name">{row.name}</span>
-            <button type="button" className="dshm-btn" disabled={busy} onClick={() => void toggleSkin(row)}>{row.disabled ? '启用' : '禁用'}</button>
-          </div>
-        ))}
-        {skins.length === 0 && <div className="dshm-hint">未检测到皮肤插件（装 dsh-web-ui / dsh-skin 系列后出现）。</div>}
-      </div>
-    </>
-  )
-}
-
-/** Shared panel body: header + tabs + tab pages. Rendered as a page inside
- * the official settings panel (settings.section slot). */
-function ManagerPanel(): ReactNode {
-  const [tab, setTab] = useState<Tab>('plugins')
-  const [busy, setBusy] = useState(false)
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
-
-  const tabs: Array<{ id: Tab; label: string }> = [
-    { id: 'plugins', label: '插件' },
-    { id: 'market', label: '市场' },
-    { id: 'skills', label: 'Skills' },
-    { id: 'mcp', label: 'MCP' },
-    { id: 'theme', label: '皮肤' },
-  ]
-
-  return (
-    <>
-      <div className="dshm-head">
-        <h2>DSH 管理控制台</h2>
-      </div>
-      <div className="dshm-tabs">
-        {tabs.map((t) => (
-          <button key={t.id} type="button" className={`dshm-tab${tab === t.id ? ' active' : ''}`}
-            onClick={() => { setTab(t.id); setMsg(null) }}>
-            {t.label}
-          </button>
-        ))}
-      </div>
-      <div className="dshm-body">
-        {tab === 'plugins' && <PluginsTab busy={busy} setBusy={setBusy} msg={msg} setMsg={setMsg} />}
-        {tab === 'market' && <MarketTab busy={busy} setBusy={setBusy} msg={msg} setMsg={setMsg} />}
-        {tab === 'skills' && <SkillsTab busy={busy} setBusy={setBusy} msg={msg} setMsg={setMsg} />}
-        {tab === 'mcp' && <McpTab busy={busy} setBusy={setBusy} msg={msg} setMsg={setMsg} />}
-        {tab === 'theme' && <ThemeTab busy={busy} setBusy={setBusy} msg={msg} setMsg={setMsg} />}
+        {view === 'market' ? (
+          <>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+              <input className="dshm-input" placeholder="搜索 MCP 开源商店（Smithery），如 github / browser / sqlite" value={marketQuery}
+                onChange={(e) => setMarketQuery(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') void searchMarket(marketQuery.trim()) }} />
+              <button type="button" className="dshm-btn primary" disabled={marketLoading} onClick={() => void searchMarket(marketQuery.trim())}>搜索</button>
+            </div>
+            <div className="dshm-hint" style={{ marginBottom: 10 }}>数据源：Smithery 开源 MCP 商店（registry.smithery.ai）· 支持远程部署的一键安装</div>
+            {marketLoading ? <div style={{ color: '#6b7384' }}>搜索中…</div>
+              : market.length === 0 ? <div style={{ color: '#6b7384' }}>没有结果，换个关键词试试。</div>
+              : <div className="dshm-grid">
+                {market.map((row) => (
+                  <div key={row.id} className="dshm-card">
+                    <div className="dshm-card-name">
+                      {row.name}
+                      {row.verified && <span className="dshm-badge ok" style={{ marginLeft: 6 }}>verified</span>}
+                      <span style={{ color: '#6b7384', fontWeight: 400, marginLeft: 6 }}>▴{row.useCount}</span>
+                    </div>
+                    <div className="dshm-card-desc">{row.description}</div>
+                    <div className="dshm-card-foot">
+                      <span className="dshm-mono" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{row.id}</span>
+                      <button type="button" className="dshm-btn primary" disabled={busy || row.url === null}
+                        title={row.url === null ? '该服务器无远程部署，无法一键安装' : row.url ?? ''}
+                        onClick={() => void installFromMarket(row)}>安装</button>
+                    </div>
+                  </div>
+                ))}
+              </div>}
+          </>
+        ) : (
+          loading ? <div style={{ color: '#6b7384' }}>加载中…</div> : servers.map((server) => (
+            <div key={server.id} className="dshm-row">
+              <span className={`dshm-badge ${server.running ? 'on' : 'off'}`}>{server.running ? '运行中' : '未加载'}</span>
+              <span className="dshm-name">{server.serverName}</span>
+              <span className="dshm-id">{server.transport === 'stdio' ? `${server.command ?? ''} ${(server.args ?? []).join(' ')}` : server.url ?? ''}</span>
+              {(server.env.length > 0 || server.headers.length > 0) && (
+                <span className="dshm-badge">env:{server.env.length} hdr:{server.headers.length}</span>
+              )}
+              <button type="button" className="dshm-btn" onClick={() => editServer(server)}>编辑</button>
+              <button type="button" className="dshm-btn danger" disabled={busy} onClick={() => void remove(server)}>删除</button>
+            </div>
+          ))
+        )}
         <Msg msg={msg} />
       </div>
-    </>
-  )
-}
-
-/** Official settings-panel page entry (settings.section slot). */
-function ManagerSection(props: Record<string, unknown>): ReactNode {
-  // The settings panel provides its own page frame, scroll, and Close; we
-  // render the panel body inline.
-  return (
-    <div className="dshm-page">
-      <ManagerPanel />
     </div>
   )
 }
 
 /**
- * Plugin body: register the official settings panel page once its slot
- * declares (sidebar 设置 → left page list → 管理控制台).
+ * Plugin body: distribute manager surfaces across the official settings
+ * panel —
+ *   settings.plugins.tab → 插件管理 / 插件市场 (inside 设置 → 插件)
+ *   settings.section     → Skills 管理 / MCP 管理 (own pages)
  * @param ctx - client root context (slots injected).
  */
 export function apply(ctx: ManagerCtx): void {
   ensureStyles()
-  ctx.slots.inject('settings.section', () => ctx.slots.register({
-    id: 'dsh-manager',
-    name: 'settings.section',
+  // 设置 → 插件 →「插件管理」tab
+  ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({
+    id: 'dsh-manager-plugins',
+    name: 'settings.plugins.tab',
     order: 50,
-    label: '管理控制台',
+    label: '插件管理',
     inject: () => ({}),
-  }, ManagerSection))
+  }, PluginsManageTab))
+  // 设置 → 插件 →「插件市场」tab
+  ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({
+    id: 'dsh-manager-market',
+    name: 'settings.plugins.tab',
+    order: 60,
+    label: '插件市场',
+    inject: () => ({}),
+  }, MarketStoreTab))
+  // 设置 →「Skills 管理」独立页
+  ctx.slots.inject('settings.section', () => ctx.slots.register({
+    id: 'dsh-manager-skills',
+    name: 'settings.section',
+    order: 51,
+    label: 'Skills 管理',
+    inject: () => ({}),
+  }, SkillsPage))
+  // 设置 →「MCP 管理」独立页
+  ctx.slots.inject('settings.section', () => ctx.slots.register({
+    id: 'dsh-manager-mcp',
+    name: 'settings.section',
+    order: 52,
+    label: 'MCP 管理',
+    inject: () => ({}),
+  }, McpPage))
 }

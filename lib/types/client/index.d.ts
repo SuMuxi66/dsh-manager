@@ -1,8 +1,12 @@
 /**
- * dsh-manager browser half: registers the sidebar footer entry and renders
- * the manager console overlay. All data flows over the same-origin /manager
- * JSON APIs served by the host half — no private harness internals. Tabs:
- * 插件 / 市场 (M1), Skills / MCP (M2), 皮肤 (M3).
+ * dsh-manager browser half: distributes its surfaces across the official
+ * settings panel —
+ *   设置 → 插件 →「插件管理」tab：loader 清单 / 运行时启停 / 持久卸载 / 安装
+ *   设置 → 插件 →「插件市场」tab：GitHub dsh-plugin 市场浏览 + 一键安装
+ *   设置 →「Skills 管理」页：技能目录列表 / 详情 / 新建 / md 导入 / 卸载
+ *   设置 →「MCP 管理」页：已配置 MCP 服务器 + Smithery 开源商店
+ * All data flows over the same-origin /manager JSON APIs served by the host
+ * half — no private harness internals.
  * @module dsh-manager/client
  */
 import { Context } from '@deepseek-ai/cordis';
@@ -16,8 +20,10 @@ interface ManagerCtx extends Context {
 /** Required services: the slot registry (declaration may come later). */
 export declare const inject: string[];
 /**
- * Plugin body: register the official settings panel page once its slot
- * declares (sidebar 设置 → left page list → 管理控制台).
+ * Plugin body: distribute manager surfaces across the official settings
+ * panel —
+ *   settings.plugins.tab → 插件管理 / 插件市场 (inside 设置 → 插件)
+ *   settings.section     → Skills 管理 / MCP 管理 (own pages)
  * @param ctx - client root context (slots injected).
  */
 export declare function apply(ctx: ManagerCtx): void;

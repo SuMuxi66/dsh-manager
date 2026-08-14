@@ -6,7 +6,8 @@
  *     home), MCP server configuration (managed block in the profile patch).
  * M3: credential keys (describe/set/unset — never echoes values), model
  *     provider settings (default model + configurable providers), theme
- *     preference and skin rows.
+ *     preference and skin rows — all removed; skin/theming is left to the
+ *     official web-ui skin center.
  * @module dsh-manager
  */
 
@@ -817,39 +818,6 @@ export function apply(ctx: Context): void {
           ]
           await saveMcpServers(ctx, servers)
           json(res, 200, { ok: true, note: `已从商店安装 ${name}（${url}）；重启 web/桌面端后生效。` })
-          return
-        }
-
-        // ================= M3: theme =================
-        // GET /manager/api/theme — theme preference + installed skin rows
-        if (req.method === 'GET' && path === '/manager/api/theme') {
-          const settings = ctx.get('settings') as { get?: (ns: string) => Record<string, unknown> | undefined } | undefined
-          const section = settings?.get?.('ui-theme') ?? {}
-          const skins: PluginRow[] = []
-          for (const entry of ctx.loader.entries()) {
-            const entryName = entry.options.name ?? ''
-            if (entryName.toLowerCase().includes('skin')) {
-              skins.push({ id: entry.options.id ?? entry.options.name, name: entryName, disabled: entry.disabled })
-            }
-          }
-          json(res, 200, { ok: true, preference: typeof section.preference === 'string' ? section.preference : 'system', skins })
-          return
-        }
-        // POST /manager/api/theme {preference}
-        if (req.method === 'POST' && path === '/manager/api/theme') {
-          const body = await readBody(req)
-          const preference = typeof body.preference === 'string' ? body.preference : ''
-          if (preference !== 'light' && preference !== 'dark' && preference !== 'system') {
-            json(res, 400, { ok: false, error: 'preference must be light | dark | system' })
-            return
-          }
-          const settings = ctx.get('settings') as { update?: (ns: string, patch: Record<string, unknown>) => Promise<unknown> } | undefined
-          if (settings?.update === undefined) {
-            json(res, 500, { ok: false, error: 'settings service unavailable' })
-            return
-          }
-          await settings.update('ui-theme', { preference })
-          json(res, 200, { ok: true })
           return
         }
 

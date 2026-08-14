@@ -6,7 +6,8 @@
  *     home), MCP server configuration (managed block in the profile patch).
  * M3: credential keys (describe/set/unset — never echoes values), model
  *     provider settings (default model + configurable providers), theme
- *     preference and skin rows.
+ *     preference and skin rows — all removed; skin/theming is left to the
+ *     official web-ui skin center.
  * @module dsh-manager
  */
 import type { Context } from '@deepseek-ai/cordis';

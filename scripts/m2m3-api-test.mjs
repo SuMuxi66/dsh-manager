@@ -138,14 +138,9 @@ check('install-market rejects bad url', r.status === 400, JSON.stringify(r.json)
 r = await call('GET', '/manager/api/models')
 check('models endpoints removed (404)', r.status === 404, JSON.stringify(r.json))
 
-// 9. theme
+// 9. theme endpoints must be gone (skins live in the official web-ui config)
 r = await call('GET', '/manager/api/theme')
-check('theme get ok', r.status === 200 && r.json.ok === true, JSON.stringify(r.json).slice(0, 300))
-const current = r.json.preference
-const next = current === 'dark' ? 'light' : 'dark'
-r = await call('POST', '/manager/api/theme', { preference: next })
-check('theme set', r.status === 200 && r.json.ok === true, JSON.stringify(r.json))
-await call('POST', '/manager/api/theme', { preference: current })
+check('theme endpoints removed (404)', r.status === 404, JSON.stringify(r.json))
 
 // 10. keys endpoints must be gone
 r = await call('GET', '/manager/api/keys')
