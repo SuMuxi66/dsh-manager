@@ -32,6 +32,9 @@ function ensureStyles(): void {
   tag.dataset.pluginCss = STYLE_TAG
   tag.textContent = `
 .dshm-root{position:fixed;inset:0;z-index:9999;background:rgba(8,10,14,.72);display:flex;align-items:center;justify-content:center;font-family:system-ui,sans-serif}
+.dshm-page{display:flex;flex-direction:column;min-height:0;font-family:system-ui,sans-serif;color:#e8eaf0}
+.dshm-page .dshm-head{border-radius:12px 12px 0 0}
+.dshm-page .dshm-body{max-height:none}
 .dshm-panel{width:min(980px,94vw);max-height:88vh;display:flex;flex-direction:column;background:#12141a;border:1px solid #262a33;border-radius:14px;box-shadow:0 24px 80px rgba(0,0,0,.5);color:#e8eaf0;overflow:hidden}
 .dshm-head{display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid #262a33;background:#15171e}
 .dshm-head h2{margin:0;font-size:15px;font-weight:600;flex:1}
@@ -834,8 +837,11 @@ function ThemeTab({ busy, setBusy, msg, setMsg }: {
   )
 }
 
-/** The manager console overlay. */
-function ManagerOverlay({ onClose }: { onClose: () => void }): ReactNode {
+/** Shared panel body: header + tabs + tab pages. Rendered either inside the
+ * floating overlay (sidebar ⚙) or as a page in the official settings panel
+ * (settings.section slot). `onClose` is optional — the settings page has the
+ * panel's own Close, the overlay shows its own. */
+function ManagerPanel({ onClose }: { onClose?: () => void }): ReactNode {
   const [tab, setTab] = useState<Tab>('plugins')
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
@@ -851,41 +857,65 @@ function ManagerOverlay({ onClose }: { onClose: () => void }): ReactNode {
   ]
 
   return (
+    <>
+      <div className="dshm-head">
+        <h2>DSH 管理控制台</h2>
+        {onClose !== undefined && (
+          <button type="button" className="dshm-close" onClick={onClose}>关闭</button>
+        )}
+      </div>
+      <div className="dshm-tabs">
+        {tabs.map((t) => (
+          <button key={t.id} type="button" className={`dshm-tab${tab === t.id ? ' active' : ''}`}
+            onClick={() => { setTab(t.id); setMsg(null) }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <div className="dshm-body">
+        {tab === 'plugins' && <PluginsTab busy={busy} setBusy={setBusy} msg={msg} setMsg={setMsg} />}
+        {tab === 'market' && <MarketTab busy={busy} setBusy={setBusy} msg={msg} setMsg={setMsg} />}
+        {tab === 'skills' && <SkillsTab busy={busy} setBusy={setBusy} msg={msg} setMsg={setMsg} />}
+        {tab === 'mcp' && <McpTab busy={busy} setBusy={setBusy} msg={msg} setMsg={setMsg} />}
+        {tab === 'keys' && <KeysTab busy={busy} setBusy={setBusy} msg={msg} setMsg={setMsg} />}
+        {tab === 'models' && <ModelsTab busy={busy} setBusy={setBusy} msg={msg} setMsg={setMsg} />}
+        {tab === 'theme' && <ThemeTab busy={busy} setBusy={setBusy} msg={msg} setMsg={setMsg} />}
+        <Msg msg={msg} />
+      </div>
+    </>
+  )
+}
+
+/** Floating overlay entry (sidebar footer ⚙). */
+function ManagerOverlay({ onClose }: { onClose: () => void }): ReactNode {
+  return (
     <div className="dshm-root" onClick={onClose}>
       <div className="dshm-panel" onClick={(e) => e.stopPropagation()}>
-        <div className="dshm-head">
-          <h2>DSH 管理控制台</h2>
-          <button type="button" className="dshm-close" onClick={onClose}>关闭</button>
-        </div>
-        <div className="dshm-tabs">
-          {tabs.map((t) => (
-            <button key={t.id} type="button" className={`dshm-tab${tab === t.id ? ' active' : ''}`}
-              onClick={() => { setTab(t.id); setMsg(null) }}>
-              {t.label}
-            </button>
-          ))}
-        </div>
-        <div className="dshm-body">
-          {tab === 'plugins' && <PluginsTab busy={busy} setBusy={setBusy} msg={msg} setMsg={setMsg} />}
-          {tab === 'market' && <MarketTab busy={busy} setBusy={setBusy} msg={msg} setMsg={setMsg} />}
-          {tab === 'skills' && <SkillsTab busy={busy} setBusy={setBusy} msg={msg} setMsg={setMsg} />}
-          {tab === 'mcp' && <McpTab busy={busy} setBusy={setBusy} msg={msg} setMsg={setMsg} />}
-          {tab === 'keys' && <KeysTab busy={busy} setBusy={setBusy} msg={msg} setMsg={setMsg} />}
-          {tab === 'models' && <ModelsTab busy={busy} setBusy={setBusy} msg={msg} setMsg={setMsg} />}
-          {tab === 'theme' && <ThemeTab busy={busy} setBusy={setBusy} msg={msg} setMsg={setMsg} />}
-          <Msg msg={msg} />
-        </div>
+        <ManagerPanel onClose={onClose} />
       </div>
     </div>
   )
 }
 
+/** Official settings-panel page entry (settings.section slot). */
+function ManagerSection(props: Record<string, unknown>): ReactNode {
+  // The settings panel provides its own page frame, scroll, and Close; we
+  // render the panel body inline (the `close` owner prop stays available).
+  return (
+    <div className="dshm-page">
+      <ManagerPanel />
+    </div>
+  )
+}
+
 /**
- * Plugin body: register the sidebar footer entry once the sidebar declares it.
+ * Plugin body: register the sidebar footer entry AND the official settings
+ * panel page once their slots declare.
  * @param ctx - client root context (slots injected).
  */
 export function apply(ctx: ManagerCtx): void {
   ensureStyles()
+  // Sidebar footer shortcut (floating overlay).
   ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
     // list-kind slots require a stable item id alongside the slot name
     id: 'dsh-manager',
@@ -900,4 +930,12 @@ export function apply(ctx: ManagerCtx): void {
       </>
     )
   }))
+  // Official settings panel page (sidebar 设置 → left page list).
+  ctx.slots.inject('settings.section', () => ctx.slots.register({
+    id: 'dsh-manager',
+    name: 'settings.section',
+    order: 50,
+    label: '管理控制台',
+    inject: () => ({}),
+  }, ManagerSection))
 }
