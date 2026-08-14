@@ -1,0 +1,7 @@
+# dsh-manager bundle patch: inserts the dual-face manager row into the web
+# profile roster. The node half (exports ".") runs in the host process and
+# serves the /manager JSON APIs; the `dsh.client` declaration in package.json
+# makes the browser half (exports "./client") load in the web GUI.
+- insert:
+    - id: manager
+      name: 'dsh-manager'
