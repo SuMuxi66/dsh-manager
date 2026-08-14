@@ -53,7 +53,8 @@ function ensureStyles(): void {
 .dshm-btn{background:var(--dsw-alias-bg-layer-3,#262a33);border:1px solid var(--dsw-alias-border-l2,#333947);color:var(--dsw-alias-label-primary,#e8eaf0);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:12px;white-space:nowrap}
 .dshm-btn:hover{background:var(--dsw-alias-bg-hover,#333947)}
 .dshm-btn.primary{background:var(--dsw-alias-accent,#0d6efd);border-color:var(--dsw-alias-accent,#0d6efd)}
-.dshm-btn.danger{background:#3a1d1d;border-color:#6e2a2a}
+.dshm-btn.danger{background:#dc3545;border-color:#dc3545;color:#fff}
+.dshm-btn.danger:hover{background:#bb2d3b}
 .dshm-btn:disabled{opacity:.5;cursor:default}
 .dshm-input{background:var(--dsw-alias-bg-base,#101218);border:1px solid var(--dsw-alias-border-l2,#333947);color:var(--dsw-alias-label-primary,#e8eaf0);border-radius:8px;padding:8px 12px;font-size:13px;flex:1;min-width:0}
 .dshm-input:focus{outline:1px solid var(--dsw-alias-accent,#0d6efd)}
