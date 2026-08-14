@@ -42,8 +42,8 @@ npm run build        # tsc + tsdown → lib/（index.js host 半 + client.js 浏
 ```
 
 测试（隔离 DSH_HOME + Playwright）：
-- API 套件：`node <repo>/_m2m3_api_test.mjs`（31 断言：skills/MCP/keys/models/theme）
-- UI 套件：`node <repo>/_ui_e2e.mjs`（22 断言：全部 7 个页签）
+- API 套件：`node scripts/m2m3-api-test.mjs`（31 断言：skills/MCP/keys/models/theme）
+- UI 套件：`BASE=<port> node scripts/ui-e2e.mjs`（22 断言：全部 7 个页签）
 
 ## 架构
 
